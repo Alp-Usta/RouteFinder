@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Finder</title>
+    <style>
+        #map {
+            height: 500px;
+            width: 80%;
+            margin: auto;
+        }
+        #controls {
+            width: 80%;
+            margin: 20px auto;
+            text-align: center;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 10px;
+            margin: 5px;
+            width: 300px;
+        }
+        .summary-panel {
+            margin: 20px auto;
+            width: 80%;
+            font-size: 16px;
+        }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=*******&callback=initMap" async defer></script>
+</head>
+<body>
+    <h1>Route Finder</h1>
+    <h2>Find Custom Routes for Drivers</h2>
+    <div id="controls">
+        <div id="locations">
+            <input type="text" class="location" placeholder="Enter location 1">
+            <input type="text" class="location" placeholder="Enter location 2">
+        </div>
+        <button id="addLocation">Add Location</button>
+        <button id="removeLocation">Remove Location</button>
+        <br>
+        <label for="numDrivers">Number of Drivers:</label>
+        <input type="number" id="numDrivers" min="1" value="3">
+        <button id="findRoutes">Find Routes</button>
+    </div>
+    <div id="map"></div>
+    <div id="routeDetails"></div>
+    <script>
+        let map;
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 40.10144209586004, lng: -75.30578283911566 },
+                zoom: 10
+            });
+        }
+
+        document.getElementById('addLocation').addEventListener('click', () => {
+            const locationWrapper = document.createElement('div');
+            locationWrapper.classList.add('location-wrapper');
+
+            const newLocationInput = document.createElement('input');
+            newLocationInput.type = 'text';
+            newLocationInput.classList.add('location');
+            newLocationInput.placeholder = `Enter location ${document.querySelectorAll('.location').length + 1}`;
+
+            locationWrapper.appendChild(newLocationInput);
+            document.getElementById('locations').appendChild(locationWrapper);
+        });
+
+        document.getElementById('removeLocation').addEventListener('click', () => {
+            const locationWrappers = document.querySelectorAll('.location-wrapper');
+            if (locationWrappers.length > 0) {
+                locationWrappers[locationWrappers.length - 1].remove();
+            } else {
+                alert("There are no locations to remove.");
+            }
+        });
+
+        document.getElementById('findRoutes').addEventListener('click', () => {
+            const locationInputs = Array.from(document.querySelectorAll('.location'));
+            const waypoints = locationInputs.map(input => input.value).filter(value => value.trim() !== '');
+            const numDrivers = document.getElementById('numDrivers').value;
+
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ waypoints, numDrivers })
+            })
+            .then(response => response.json())
+            .then(routes => {
+                const routeDetails = document.getElementById('routeDetails');
+                routeDetails.innerHTML = '';
+                routes.forEach((route, index) => {
+                    let summaryPanel = document.createElement('div');
+                    summaryPanel.classList.add('summary-panel');
+                    summaryPanel.innerHTML = `<b>Route for Driver ${index + 1}</b><br>`;
+                    route.forEach(stop => {
+                        summaryPanel.innerHTML += `${stop.address}<br>`;
+                        const marker = new google.maps.Marker({
+                            position: stop.coordinates,
+                            map: map,
+                            label: `${index + 1}`
+                        });
+                    });
+                    routeDetails.appendChild(summaryPanel);
+
+                    // Plot route on the map
+                    const routePath = route.map(stop => stop.coordinates);
+                    const routePolyline = new google.maps.Polyline({
+                        path: routePath,
+                        geodesic: true,
+                        strokeColor: getRandomColor(),
+                        strokeOpacity: 1.0,
+                        strokeWeight: 2
+                    });
+                    routePolyline.setMap(map);
+                });
+            });
+        });
+
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+    </script>
+</body>
+</html>
