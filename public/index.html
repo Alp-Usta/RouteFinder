@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Route Finder</title>
+    <style>
+        body {
+            background-color: #0D1014;
+            color: #FFFFFF;
+            font-family: Arial, sans-serif;
+        }
+        #map {
+            height: 500px;
+            width: 80%;
+            margin: auto;
+        }
+        #controls {
+            width: 80%;
+            margin: 20px auto;
+            text-align: center;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 10px;
+            margin: 5px;
+            width: 300px;
+        }
+        .summary-panel {
+            margin: 20px auto;
+            width: 80%;
+            font-size: 16px;
+        }
+    </style>
+    <script src="https://maps.googleapis.com/maps/api/js?key=****&callback=initMap" async defer></script>
+</head>
+<body>
+    <h1>Route Finder</h1>
+    <h2>Find Custom Routes for Drivers</h2>
+    <div id="controls">
+        <div id="locations">
+            <input type="text" class="location" placeholder="Enter location 1">
+            <input type="text" class="location" placeholder="Enter location 2">
+            <input type="text" class="location" placeholder="Enter location 3">
+        </div>
+        <button id="addLocation">Add Location</button>
+        <button id="removeLocation">Remove Location</button>
+        <br>
+        <label for="numDrivers">Number of Drivers:</label>
+        <input type="number" id="numDrivers" min="1" value="3">
+        <br>
+        <label for="hourLimit">Hour Limit per Driver:</label>
+        <input type="number" id="hourLimit" min="1" value="3">
+        <br>
+        <button id="findRoutes">Find Routes</button>
+    </div>
+    <div id="map"></div>
+    <div id="routeDetails"></div>
+    <script>
+        let map;
+        const ws = new WebSocket('ws://localhost:3000');
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 40.10144209586004, lng: -75.30578283911566 },
+                zoom: 10
+            });
+        }
+
+        document.getElementById('addLocation').addEventListener('click', addLocation);
+        document.getElementById('removeLocation').addEventListener('click', removeLocation);
+        document.getElementById('findRoutes').addEventListener('click', findRoutes);
+
+        function addLocation() {
+            const newLocationInput = document.createElement('input');
+            newLocationInput.type = 'text';
+            newLocationInput.classList.add('location');
+            newLocationInput.placeholder = `Enter location ${document.querySelectorAll('.location').length + 1}`;
+            document.getElementById('locations').appendChild(newLocationInput);
+        }
+
+        function removeLocation() {
+            const locations = document.querySelectorAll('.location');
+            if (locations.length > 2) {
+                locations[locations.length - 1].remove();
+            } else {
+                alert("You need at least two locations.");
+            }
+        }
+
+        function findRoutes() {
+            const locationInputs = Array.from(document.querySelectorAll('.location'));
+            const waypoints = locationInputs.map(input => input.value).filter(value => value.trim() !== '');
+            const numDrivers = document.getElementById('numDrivers').value;
+            const hourLimit = document.getElementById('hourLimit').value;
+
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ waypoints, numDrivers, hourLimit })
+            })
+            .then(response => response.json())
+            .then(routes => {
+                console.log('Routes:', routes);
+                const routeDetails = document.getElementById('routeDetails');
+                routeDetails.innerHTML = '';
+                routes.forEach((route, index) => {
+                    let summaryPanel = document.createElement('div');
+                    summaryPanel.classList.add('summary-panel');
+                    summaryPanel.innerHTML = `<b>Route for Driver ${index + 1}</b><br>`;
+                    route.route.forEach((stop, stopIndex) => {
+                        summaryPanel.innerHTML += `${stopIndex + 1}. ${stop.address}<br>`;
+                        const marker = new google.maps.Marker({
+                            position: stop.coordinates,
+                            map: map,
+                            label: `${stopIndex + 1}`
+                        });
+                    });
+                    routeDetails.appendChild(summaryPanel);
+
+                    const routePath = route.route.map(stop => stop.coordinates);
+                    const routePolyline = new google.maps.Polyline({
+                        path: routePath,
+                        geodesic: true,
+                        strokeColor: getRandomColor(),
+                        strokeOpacity: 1.0,
+                        strokeWeight: 2
+                    });
+                    routePolyline.setMap(map);
+                });
+            })
+            .catch(error => {
+                console.error('Error fetching routes:', error);
+            });
+        }
+
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.ctrlKey && event.key === '.') {
+                addLocation();
+            } else if (event.ctrlKey && event.key === ',') {
+                removeLocation();
+            } else if (event.ctrlKey && event.key === 'ArrowUp') {
+                const numDriversInput = document.getElementById('numDrivers');
+                numDriversInput.value = parseInt(numDriversInput.value) + 1;
+            } else if (event.ctrlKey && event.key === 'ArrowDown') {
+                const numDriversInput = document.getElementById('numDrivers');
+                numDriversInput.value = Math.max(1, parseInt(numDriversInput.value) - 1);
+            } else if (event.ctrlKey && event.key === 'ArrowRight') {
+                const locationInputs = document.querySelectorAll('.location');
+                const focusedElement = document.activeElement;
+                const currentIndex = Array.from(locationInputs).indexOf(focusedElement);
+                if (currentIndex !== -1 && currentIndex < locationInputs.length - 1) {
+                    locationInputs[currentIndex + 1].focus();
+                }
+            } else if (event.ctrlKey && event.key === 'ArrowLeft') {
+                const locationInputs = document.querySelectorAll('.location');
+                const focusedElement = document.activeElement;
+                const currentIndex = Array.from(locationInputs).indexOf(focusedElement);
+                if (currentIndex > 0) {
+                    locationInputs[currentIndex - 1].focus();
+                }
+            } else if (event.ctrlKey && event.key === 'Enter') {
+                findRoutes();
+            }
+        });
+
+        ws.onopen = () => {
+            console.log('Connected to WebSocket server');
+        };
+
+        ws.onmessage = (event) => {
+            console.log('Received:', event.data);
+            const locationInput = document.createElement('input');
+            locationInput.type = 'text';
+            locationInput.classList.add('location');
+            locationInput.value = event.data;
+            document.getElementById('locations').appendChild(locationInput);
+        };
+
+        ws.onclose = () => {
+            console.log('Disconnected from WebSocket server');
+        };
+    </script>
+</body>
+</html>
