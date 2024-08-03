@@ -12,133 +12,146 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Google Maps API key (replace with your own API key)
-const googleMapsApiKey = '***';
+const googleMapsApiKey = "***"; // Replace with your actual API key
 
 // Starting location
 const startingLocation = { lat: 40.10144209586004, lng: -75.30578283911566 };
 
 // Function to geocode addresses and get zip codes and state
 const geocodeAddresses = async (addresses) => {
-    const geocoded = [];
-    for (const address of addresses) {
+    const geocoded = await Promise.all(addresses.map(async (address) => {
         const response = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-            params: {
-                address: address,
-                key: googleMapsApiKey
-            }
+            params: { address, key: googleMapsApiKey }
         });
         if (response.data.results.length > 0) {
             const result = response.data.results[0];
             const postalComponent = result.address_components.find(component => component.types.includes('postal_code'));
             const stateComponent = result.address_components.find(component => component.types.includes('administrative_area_level_1'));
+            const cityComponent = result.address_components.find(component => component.types.includes('locality'));
             const zipCode = postalComponent ? postalComponent.long_name : 'Unknown';
             const state = stateComponent ? stateComponent.short_name : 'Unknown';
-            geocoded.push({
-                address: address,
+            const city = cityComponent ? cityComponent.long_name : 'Unknown';
+            return {
+                address,
                 coordinates: result.geometry.location,
-                zipCode: zipCode,
-                state: state
-            });
+                zipCode,
+                state,
+                city
+            };
         }
-    }
-    return geocoded;
+    }));
+    return geocoded.filter(item => item);
 };
 
-const getDistanceMatrix = async (origins, destinations) => {
-    const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
-        params: {
-            origins: origins.map(loc => `${loc.lat},${loc.lng}`).join('|'),
-            destinations: destinations.map(loc => `${loc.lat},${loc.lng}`).join('|'),
-            key: googleMapsApiKey
-        }
-    });
+// Function to calculate the distance between two coordinates using the Haversine formula
+const calculateDistance = (coord1, coord2) => {
+    const toRad = angle => angle * (Math.PI / 180);
+    const R = 6371; // Radius of the Earth in kilometers
+    const dLat = toRad(coord2.lat - coord1.lat);
+    const dLng = toRad(coord2.lng - coord1.lng);
 
-    if (response.data.status !== 'OK') {
-        throw new Error('Error with the Distance Matrix API');
-    }
-
-    const distances = response.data.rows.map(row => row.elements.map(elem => elem.duration.value));
-    return distances;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(toRad(coord1.lat)) * Math.cos(toRad(coord2.lat)) *
+              Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in kilometers
 };
 
-// Function to cluster waypoints by state, zip code, and proximity
-const clusterAndSortWaypoints = (waypoints) => {
-    const clusters = {};
+// Function to sort waypoints by proximity using a simple greedy approach
+const sortWaypointsByProximity = (waypoints, startLocation) => {
+    const sorted = [];
+    let currentLocation = startLocation;
+    const remainingWaypoints = [...waypoints];
 
-    // Step 1: Cluster by state and zip code
+    while (remainingWaypoints.length > 0) {
+        let nearestIndex = 0;
+        let nearestDistance = calculateDistance(currentLocation, remainingWaypoints[0].coordinates);
+
+        for (let i = 1; i < remainingWaypoints.length; i++) {
+            const distance = calculateDistance(currentLocation, remainingWaypoints[i].coordinates);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = i;
+            }
+        }
+
+        const nearestWaypoint = remainingWaypoints.splice(nearestIndex, 1)[0];
+        sorted.push(nearestWaypoint);
+        currentLocation = nearestWaypoint.coordinates;
+    }
+
+    return sorted;
+};
+
+// Function to cluster and sort waypoints by state
+const clusterWaypointsByState = (waypoints) => {
+    const stateClusters = {};
+
+    // Cluster by state
     waypoints.forEach(wp => {
-        if (!clusters[wp.state]) {
-            clusters[wp.state] = {};
+        if (!stateClusters[wp.state]) {
+            stateClusters[wp.state] = [];
         }
-        if (!clusters[wp.state][wp.zipCode]) {
-            clusters[wp.state][wp.zipCode] = [];
-        }
-        clusters[wp.state][wp.zipCode].push(wp);
+        stateClusters[wp.state].push(wp);
     });
 
-    // Step 2: Sort each zip code cluster by coordinates (latitude and longitude)
+    // Sort each state cluster by proximity
+    Object.keys(stateClusters).forEach(state => {
+        stateClusters[state] = sortWaypointsByProximity(stateClusters[state], startingLocation);
+    });
+
+    return stateClusters;
+};
+
+// Function to assign routes to drivers
+const assignRoutesToDrivers = (clusters, numDrivers) => {
+    const driverRoutes = Array.from({ length: numDrivers }, () => ({
+        route: [{ address: 'Starting Location', coordinates: startingLocation }]
+    }));
+
+    let driverIndex = 0;
+    let assignedDriverRoutes = 0;
+
+    // Assign clusters to drivers, maintaining state order
     Object.values(clusters).forEach(stateCluster => {
-        Object.values(stateCluster).forEach(zipCluster => {
-            zipCluster.sort((a, b) => {
-                if (a.coordinates.lat === b.coordinates.lat) {
-                    return a.coordinates.lng - b.coordinates.lng;
+        let subCluster = [];
+        stateCluster.forEach((waypoint, index) => {
+            subCluster.push(waypoint);
+            // Assign when you have a sub-cluster of locations
+            if (subCluster.length >= 2 || index === stateCluster.length - 1) {
+                if (assignedDriverRoutes < numDrivers) {
+                    driverRoutes[driverIndex].route.push(...subCluster);
+                    driverIndex++;
+                    assignedDriverRoutes++;
+                    subCluster = [];
                 }
-                return a.coordinates.lat - b.coordinates.lat;
-            });
+            }
         });
     });
 
-    return clusters;
+    return driverRoutes;
 };
 
 // Route to calculate and display routes
 app.post('/calculate-routes', async (req, res) => {
-    const { waypoints, numDrivers, hourLimit } = req.body;
+    const { waypoints, numDrivers } = req.body;
 
     try {
         console.log('Received waypoints:', waypoints);
         console.log('Number of drivers:', numDrivers);
-        console.log('Hour limit per driver:', hourLimit);
 
         const geocodedWaypoints = await geocodeAddresses(waypoints);
         console.log('Geocoded waypoints:', geocodedWaypoints);
 
-        const allLocations = [startingLocation, ...geocodedWaypoints.map(wp => wp.coordinates)];
-        const distanceMatrix = await getDistanceMatrix(allLocations, allLocations);
+        // Cluster and sort waypoints by state
+        const clusters = clusterWaypointsByState(geocodedWaypoints);
 
-        console.log('Distance Matrix:', JSON.stringify(distanceMatrix, null, 2));
+        // Assign clusters to drivers
+        const driverRoutes = assignRoutesToDrivers(clusters, numDrivers);
 
-        const driverRoutes = Array.from({ length: numDrivers }, () => ({
-            route: [{ address: 'Starting Location', coordinates: startingLocation }],
-            currentRouteTime: 0
-        }));
-        const maxTravelTime = hourLimit * 3600; // Max travel time in seconds
-
-        // Cluster and sort waypoints by state, zip code, and coordinates
-        const clusters = clusterAndSortWaypoints(geocodedWaypoints);
-
-        // Distribute sorted clusters among drivers in a round-robin fashion
-        let driverIndex = 0;
-        Object.values(clusters).forEach(stateCluster => {
-            Object.values(stateCluster).forEach(zipCluster => {
-                zipCluster.forEach(waypoint => {
-                    const driverRoute = driverRoutes[driverIndex];
-                    const lastLocationIndex = allLocations.indexOf(driverRoute.route[driverRoute.route.length - 1].coordinates);
-                    const travelTimeFromLastLocation = distanceMatrix[lastLocationIndex][allLocations.indexOf(waypoint.coordinates)];
-
-                    if (driverRoute.currentRouteTime + travelTimeFromLastLocation <= maxTravelTime) {
-                        driverRoute.route.push(waypoint);
-                        driverRoute.currentRouteTime += travelTimeFromLastLocation;
-                    } else {
-                        console.log(`Skipping waypoint due to exceeding travel time for all drivers: ${waypoint.address}`);
-                    }
-                });
-                driverIndex = (driverIndex + 1) % numDrivers;
-            });
-        });
-
-        // Prepare final routes by removing the currentRouteTime property
-        const finalRoutes = driverRoutes.map(driverRoute => ({
+        // Prepare final routes
+        const finalRoutes = driverRoutes.map((driverRoute, index) => ({
+            driver: index + 1,
             route: driverRoute.route.map(location => ({
                 address: location.address,
                 coordinates: location.coordinates
