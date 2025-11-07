@@ -1,16 +1,16 @@
 # **🚀 RouteFinder: Logistics Optimization Tool (V2)**
 
-**A successful solution developed by alp, an Amazon DPH9 Warehouse Associate and third-year Drexel CS student, to directly solve station dispatch challenges.**
+**An attempt to solve station dispatch challenges.**
 
-This application perfects the dispatch process for leftover packages by replacing subjective, inefficient manual routing with accurate, data-driven optimization.
+This application attempts to improve the dispatch process for leftover packages by replacing subjective, inefficient manual routing with accurate, data-driven optimization.
 
-## **The Problem Solved**
+## **The Attempt**
 
 This project directly addresses three major issues impacting the DPH9 station:
 
-1. **Inefficient Dispatch Bottleneck:** Eliminates the delays caused by manually sorting and grouping packages.  
-2. **Flex Driver Fairness:** Replaces unbalanced, hand-created routes with **impartial, data-driven assignments**, directly addressing driver complaints.  
-3. **The 'Philadelphia Problem' (Geo-Fragmentation):** Our manual process failed to logically segment large metro areas. RouteFinder uses **state-based clustering** to guarantee sensible, dense zones.
+1. **Inefficient Dispatch Bottleneck:** Tries to fix the delays caused by manually sorting and grouping packages.  
+2. **Flex Driver Fairness:**Attempts to fix unbalanced, hand-created routes with **impartial, data-driven assignments**, directly addressing driver complaints.  
+3. **The 'Philadelphia Problem' (Geo-Fragmentation):** The manual process failes to logically segment large metro areas and extremly time consuming to sort. RouteFinder uses **state-based clustering** to fix this issue.
 
 ## **✨ Key Technical Achievements**
 
