@@ -9,7 +9,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- CONFIGURATION ---
-const googleMapsApiKey = 'YOUR_API_KEY_HERE'; // ⚠️ Paste your API key here
+const googleMapsApiKey = 'YOUR_GOOGLE_MAPS_API_KEY'; // ⚠️ Paste your API key here
 const startingLocation = { 
     address: 'Starting Location',
     coordinates: { lat: 40.10144209586004, lng: -75.30578283911566 }
