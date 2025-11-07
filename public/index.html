@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteFinder for DPH9</title>
+    <style>
+        /* --- Dark Mode Body & Font --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            margin: 0;
+            padding: 20px;
+        }
+
+        /* --- Main Container --- */
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: #1E1E1E; /* Lighter container background */
+            border-radius: 12px;
+            border: 1px solid #3B3B3B; /* Subtle border */
+            overflow: hidden;
+        }
+
+        header {
+            background-color: #282828; /* Header background */
+            color: white;
+            padding: 20px 30px;
+            text-align: center;
+            border-bottom: 1px solid #3B3B3B;
+        }
+        header h1 { margin: 0; font-size: 2em; }
+        
+        #controls {
+            padding: 30px;
+            background-color: #1E1E1E;
+        }
+        .control-grid {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: end;
+        }
+        #locations {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        .form-group { display: flex; flex-direction: column; }
+        label { margin-bottom: 5px; font-weight: 500; color: #B3B3B3; }
+        input[type="text"], input[type="number"] {
+            padding: 12px;
+            border: 1px solid #535353;
+            background-color: #3B3B3B;
+            color: #FFFFFF;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        
+        input[type="text"]:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: #fca311;
+            box-shadow: 0 0 0 3px rgba(252, 163, 17, 0.3);
+        }
+        .button-group { display: flex; gap: 10px; }
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.2s;
+        }
+        
+        #findRoutes { 
+            background-color: #fca311; 
+            color: #121212; /* Dark text for bright button */
+        }
+        #findRoutes:hover {
+            background-color: #e89300;
+            transform: translateY(-2px);
+        }
+        .location-button { 
+            background-color: #3B3B3B; 
+            color: #EFEFEF; 
+        }
+        .location-button:hover { background-color: #535353; }
+        
+        #map { 
+            height: 500px; 
+            width: 100%;
+            background-color: #242f3e; /* Dark map background */
+        }
+        
+        #routeDetails {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 30px;
+        }
+        .summary-panel {
+            background-color: #282828; /* Panel background */
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #3B3B3B;
+           
+            border-top-width: 4px;
+        }
+        .summary-panel b {
+            font-size: 1.2em;
+            color: #FFFFFF; /* White title */
+            display: block;
+            margin-bottom: 5px;
+        }
+        .summary-panel .total-time {
+            font-size: 1.1em;
+            font-weight: bold;
+     
+            display: block;
+            margin-bottom: 10px;
+        }
+        footer {
+            text-align: center;
+            padding: 20px;
+            background-color: #1E1E1E;
+            border-top: 1px solid #3B3B3B;
+            color: #B3B3B3;
+            font-size: 0.9em;
+        }
+    </style>
+    <!-- ⚠️ ACTION REQUIRED: Replace 'YOUR_GOOGLE_MAPS_API_KEY' with your actual key -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY_HERE&callback=initMap" async defer></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Route Planner</h1>
+        </header>
+        
+        <div id="controls">
+            <div class="control-grid">
+                <div class="form-group">
+                    <label>Locations (Zip Codes)</label>
+                    <div id="locations">
+                        <!-- Pre-filled with all 48 test zip codes -->
+                        <input type="text" class="location" value="19102"><input type="text" class="location" value="19103"><input type="text" class="location" value="19107"><input type="text" class="location" value="19146"><input type="text" class="location" value="19147"><input type="text" class="location" value="19104"><input type="text" class="location" value="19139"><input type="text" class="location" value="19143"><input type="text" class="location" value="19121"><input type="text" class="location" value="19122"><input type="text" class="location" value="19125"><input type="text" class="location" value="19130"><input type="text" class="location" value="19111"><input type="text" class="location" value="19115"><input type="text" class="location" value="19116"><input type="text" class="location" value="19152"><input type="text" class="location" value="19154"><input type="text" class="location" value="19406"><input type="text" class="location" value="19481"><input type="text" class="location" value="19401"><input type="text" class="location" value="19403"><input type="text" class="location" value="19460"><input type="text" class="location" value="19456"><input type="text" class="location" value="19426"><input type="text" class="location" value="19468"><input type="text" class="location" value="19464"><input type="text" class="location" value="19518"><input type="text" class="location" value="19601"><input type="text" class="location" value="19602"><input type="text" class="location" value="19604"><input type="text" class="location" value="19610"><input type="text" class="location" value="19608"><input type="text" class="location" value="19606"><input type="text" class="location" value="08102"><input type="text" class="location" value="08105"><input type="text" class="location" value="08109"><input type="text" class="location" value="08110"><input type="text" class="location" value="08002"><input type="text" class="location" value="08003"><input type="text" class="location" value="08034"><input type="text" class="location" value="08033"><input type="text" class="location" value="08107"><input type="text" class="location" value="08108"><input type="text" class="location" value="08030"><input type="text" class="location" value="08043"><input type="text" class="location" value="08053">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="numDrivers">Drivers</label>
+                    <input type="number" id="numDrivers" min="1" value="8">
+                </div>
+            </div>
+            <div class="button-group" style="margin-top: 20px;">
+                <button id="findRoutes">Find Routes</button>
+                <button id="addLocation" class="location-button">Add Location (Alt +)</button>
+                <button id="removeLocation" class="location-button">Remove Location (Alt -)</button>
+            </div>
+        </div>
+        
+        <div id="map"></div>
+        <div id="routeDetails"></div>
+        
+        <footer>
+            <p>&copy; 2025 - Developed by Alp Usta - @ustaseza</p>
+        </footer>
+    </div>
+
+    <script>
+        let map;
+        let mapElements = [];
+
+        //Google Maps "Night Mode" style
+        const mapStyle = [
+            {"elementType":"geometry","stylers":[{"color":"#242f3e"}]},
+            {"elementType":"labels.text.fill","stylers":[{"color":"#746855"}]},
+            {"elementType":"labels.text.stroke","stylers":[{"color":"#242f3e"}]},
+            {"featureType":"administrative.locality","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+            {"featureType":"poi","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+            {"featureType":"poi.park","elementType":"geometry","stylers":[{"color":"#263c3f"}]},
+            {"featureType":"poi.park","elementType":"labels.text.fill","stylers":[{"color":"#6b9a76"}]},
+            {"featureType":"road","elementType":"geometry","stylers":[{"color":"#38414e"}]},
+            {"featureType":"road","elementType":"geometry.stroke","stylers":[{"color":"#212a37"}]},
+            {"featureType":"road","elementType":"labels.text.fill","stylers":[{"color":"#9ca5b3"}]},
+            {"featureType":"road.highway","elementType":"geometry","stylers":[{"color":"#746855"}]},
+            {"featureType":"road.highway","elementType":"geometry.stroke","stylers":[{"color":"#1f2835"}]},
+            {"featureType":"road.highway","elementType":"labels.text.fill","stylers":[{"color":"#f3d19c"}]},
+            {"featureType":"transit","elementType":"geometry","stylers":[{"color":"#2f3948"}]},
+            {"featureType":"transit.station","elementType":"labels.text.fill","stylers":[{"color":"#d59563"}]},
+            {"featureType":"water","elementType":"geometry","stylers":[{"color":"#17263c"}]},
+            {"featureType":"water","elementType":"labels.text.fill","stylers":[{"color":"#515c6d"}]},
+            {"featureType":"water","elementType":"labels.text.stroke","stylers":[{"color":"#17263c"}]}
+        ];
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 40.10144209586004, lng: -75.30578283911566 },
+                zoom: 9,
+                styles: mapStyle, // Apply the custom style
+                disableDefaultUI: true,
+                zoomControl: true,
+                fullscreenControl: true
+            });
+        }
+
+        // Function to clear old elements from the map
+        function clearMap() {
+            mapElements.forEach(element => element.setMap(null));
+            mapElements = [];
+        }
+
+        // Helper function to format decimal hours
+        function formatHours(decimalHours) {
+            const hours = Math.floor(decimalHours);
+            const minutes = Math.round((decimalHours - hours) * 60);
+            
+            let output = "TOTAL: ";
+            if (hours > 0) {
+                output += `${hours} HR `;
+            }
+            // Always show minutes, even if 0, for clarity
+            output += `${minutes} MIN`;
+            return output;
+        }
+
+        function addLocation() {
+            const newLocationInput = document.createElement('input');
+            newLocationInput.type = 'text';
+            newLocationInput.classList.add('location');
+            newLocationInput.placeholder = 'Enter Zip';
+            document.getElementById('locations').appendChild(newLocationInput);
+            newLocationInput.focus(); // Focus the new input
+        }
+
+        function removeLocation() {
+            const locationsDiv = document.getElementById('locations');
+            if (locationsDiv.children.length > 2) { // Keep at least 2 inputs
+                locationsDiv.removeChild(locationsDiv.lastElementChild);
+            } else {
+                alert("Cannot remove any more locations.");
+            }
+        }
+
+        document.getElementById('addLocation').addEventListener('click', addLocation);
+        document.getElementById('removeLocation').addEventListener('click', removeLocation);
+
+        document.addEventListener('keydown', (e) => {
+            if (document.activeElement.tagName === 'INPUT') return;
+            if (e.altKey && e.key === '=') { e.preventDefault(); addLocation(); }
+            if (e.altKey && e.key === '-') { e.preventDefault(); removeLocation(); }
+        });
+
+
+        document.getElementById('findRoutes').addEventListener('click', () => {
+            clearMap(); 
+            const routeDetails = document.getElementById('routeDetails');
+            routeDetails.innerHTML = '';
+            
+            const findButton = document.getElementById('findRoutes');
+            findButton.textContent = 'Calculating...';
+            findButton.disabled = true;
+
+            const locationInputs = Array.from(document.querySelectorAll('.location'));
+            const waypoints = locationInputs.map(input => input.value).filter(value => value.trim() !== '');
+            const numDrivers = document.getElementById('numDrivers').value;
+
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ waypoints, numDrivers })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw new Error(err.details || 'Server error') });
+                }
+                return response.json();
+            })
+            .then(routes => {
+                findButton.textContent = 'Find Routes';
+                findButton.disabled = false;
+                
+                const colors = ['#d90429', '#0077b6', '#52b69a', '#fca311', '#8338ec', '#fb5607', '#00f5d4', '#ffc600'];
+
+                routes.forEach((routeData, index) => {
+                    const route = routeData.route;
+                    const totalHours = routeData.totalHours;
+                    const color = colors[index % colors.length];
+
+                    let summaryPanel = document.createElement('div');
+                    summaryPanel.classList.add('summary-panel');
+                    summaryPanel.style.borderTop = `4px solid ${color}`;
+                    
+                    let summaryHTML = `<b>Route for Driver ${index + 1}</b>`;
+                    //Use the new formatHours function
+                    summaryHTML += `<span class="total-time" style="color: ${color};">${formatHours(totalHours)}</span>`;
+                    
+                    route.forEach(stop => {
+                        summaryHTML += `${stop.address}<br>`;
+                    });
+                    summaryPanel.innerHTML = summaryHTML;
+                    routeDetails.appendChild(summaryPanel);
+
+                    route.forEach((stop, stopIndex) => {
+                        const marker = new google.maps.Marker({
+                            position: stop.coordinates,
+                            map: map,
+                            label: {
+                                text: stopIndex === 0 ? 'Start' : `${stopIndex}`,
+                                color: "white",
+                                fontWeight: "bold"
+                            },
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 15,
+                                fillColor: color,
+                                fillOpacity: 1,
+                                strokeWeight: 0
+                            }
+                        });
+                        mapElements.push(marker);
+                    });
+
+                    const routePath = route.map(stop => stop.coordinates);
+                    const routePolyline = new google.maps.Polyline({
+                        path: routePath,
+                        geodesic: true,
+                        strokeColor: color,
+                        strokeOpacity: 0.8,
+                        strokeWeight: 4
+                    });
+                    routePolyline.setMap(map);
+                    mapElements.push(routePolyline);
+                });
+            })
+            .catch(err => {
+                console.error("Error fetching routes:", err);
+                findButton.textContent = 'Find Routes';
+                findButton.disabled = false;
+                alert(`Error calculating routes. Check the server console.\nDetails: ${err.message}`);
+            });
+        });
+    </script>
+</body>
+</html>
