@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteFinder (CSV)</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; background: #1E1E1E; border-radius: 12px; border: 1px solid #3B3B3B; overflow: hidden; }
+        header { background-color: #282828; color: white; padding: 20px 30px; text-align: center; border-bottom: 1px solid #3B3B3B; }
+        header h1 { margin: 0; font-size: 2em; }
+        #controls { padding: 30px; background-color: #1E1E1E; }
+        .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: end; }
+        .form-group { display: flex; flex-direction: column; }
+        label { margin-bottom: 5px; font-weight: 500; color: #B3B3B3; }
+        input[type="text"], input[type="number"], input[type="file"] { padding: 12px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; font-size: 16px; }
+        button { padding: 12px 20px; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background-color 0.3s, transform 0.2s; }
+        #findRoutes { background-color: #fca311; color: #121212; }
+        #findRoutes:hover { background-color: #e89300; transform: translateY(-2px); }
+        #map { height: 500px; width: 100%; background-color: #242f3e; }
+        #routeDetails { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; padding: 30px; }
+        .summary-panel { background-color: #282828; padding: 20px; border-radius: 8px; border: 1px solid #3B3B3B; color: #EFEFEF; border-top-width: 4px; }
+        .summary-panel b { font-size: 1.2em; color: #FFFFFF; display: block; margin-bottom: 5px; }
+        .summary-panel .total-time { font-size: 1.1em; font-weight: bold; display: block; margin-bottom: 10px; }
+        /* Style for the TBA list */
+        .tba-list { font-size: 0.9em; color: #B3B3B3; padding-left: 15px; margin-top: 5px; }
+        .leaflet-popup-content-wrapper { background-color: #282828; color: #EFEFEF; border: 1px solid #535353; }
+        .leaflet-popup-tip { background-color: #282828; }
+        .leaflet-popup-content { margin: 10px; }
+        .leaflet-control-zoom-in, .leaflet-control-zoom-out { background-color: #282828 !important; color: #EFEFEF !important; border: 1px solid #535353 !important; }
+        .leaflet-control-zoom-in:hover, .leaflet-control-zoom-out:hover { background-color: #3B3B3B !important; }
+        footer { text-align: center; padding: 20px; background-color: #1E1E1E; border-top: 1px solid #3B3B3B; color: #B3B3B3; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>RouteFinder</h1>
+        </header>
+        
+        <div id="controls">
+            <div class="control-grid">
+                <div class="form-group">
+                    <label for="csvFile">Upload CSV File</label>
+                    <input type="file" id="csvFile" accept=".csv">
+                </div>
+                <div class="form-group">
+                    <label for="numDrivers">Drivers</label>
+                    <input type="number" id="numDrivers" min="1" value="8">
+                </div>
+            </div>
+            <div class="button-group" style="margin-top: 20px;">
+                <button id="findRoutes">Find Routes</button>
+            </div>
+        </div>
+        
+        <div id="map"></div>
+        <div id="routeDetails"></div>
+        
+        <footer>
+            <p>&copy; 2025 - Developed by Alp Usta - Amazon @ustaseza</p>
+        </footer>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        let map;
+        let mapElements = [];
+      
+        let parsedPackages = []; 
+
+        function initMap() {
+            if (map) { map.remove(); }
+            map = L.map('map').setView([40.101, -75.305], 9);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }).addTo(map);
+            map.zoomControl.addTo(map);
+        }
+
+        window.onload = initMap;
+
+        function clearMap() {
+            mapElements.forEach(element => map.removeLayer(element));
+            mapElements = [];
+        }
+
+        function formatHours(decimalHours) {
+            const hours = Math.floor(decimalHours);
+            const minutes = Math.round((decimalHours - hours) * 60);
+            let output = "TOTAL: ";
+            if (hours > 0) { output += `${hours} HR `; }
+            output += `${minutes} MIN`;
+            return output;
+        }
+
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n');
+            const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
+            
+            // Find the column index for 'postal' and 'tba'
+            const postalIndex = headers.indexOf('Postal');
+            const tbaIndex = headers.indexOf('Tracking ID');
+
+            if (postalIndex === -1 || tbaIndex === -1) {
+                alert("Error: CSV must contain 'postal' and 'tba' headers.");
+                return [];
+            }
+
+            const packages = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (lines[i].trim() === '') continue;
+                const data = lines[i].split(',');
+                packages.push({
+                    postal: data[postalIndex].trim(),
+                    tba: data[tbaIndex].trim()
+                });
+            }
+            return packages;
+        }
+        
+        // When a file is selected, read and parse it
+        document.getElementById('csvFile').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                parsedPackages = parseCSV(e.target.result);
+                alert(`Loaded ${parsedPackages.length} packages successfully.`);
+            };
+            reader.readAsText(file);
+        });
+
+
+        document.getElementById('findRoutes').addEventListener('click', () => {
+            if (parsedPackages.length === 0) {
+                alert("Please upload a CSV file with packages first.");
+                return;
+            }
+
+            clearMap(); 
+            const routeDetails = document.getElementById('routeDetails');
+            routeDetails.innerHTML = '';
+            
+            const findButton = document.getElementById('findRoutes');
+            findButton.textContent = 'Calculating...';
+            findButton.disabled = true;
+
+            const numDrivers = document.getElementById('numDrivers').value;
+
+            // Send the full package array
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ packages: parsedPackages, numDrivers })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw new Error(err.details || 'Server error') });
+                }
+                return response.json();
+            })
+            .then(routes => {
+                findButton.textContent = 'Find Routes';
+                findButton.disabled = false;
+                
+                const colors = ['#d90429', '#0077b6', '#52b69a', '#fca311', '#8338ec', '#fb5607', '#00f5d4', '#ffc600'];
+                let allPoints = [];
+
+                routes.forEach((routeData, index) => {
+                    const route = routeData.route;
+                    const totalHours = routeData.totalHours;
+                    const color = colors[index % colors.length];
+
+                    let summaryPanel = document.createElement('div');
+                    summaryPanel.classList.add('summary-panel');
+                    summaryPanel.style.borderTop = `4px solid ${color}`;
+                    
+                    let summaryHTML = `<b>Route for Driver ${index + 1}</b>`;
+                    summaryHTML += `<span class="total-time" style="color: ${color};">${formatHours(totalHours)}</span>`;
+                    
+                    route.forEach(stop => {
+                        // The 'stop' object has 'address' (zip) and 'tbas' (array)
+                        summaryHTML += `<b>${stop.address}</b> (${stop.tbas.length} packages)<br>`;
+                        summaryHTML += `<ul class="tba-list">`;
+                        stop.tbas.forEach(tba => {
+                            summaryHTML += `<li>${tba}</li>`;
+                        });
+                        summaryHTML += `</ul>`;
+                    });
+                    summaryPanel.innerHTML = summaryHTML;
+                    routeDetails.appendChild(summaryPanel);
+
+                    route.forEach((stop, stopIndex) => {
+                        const marker = L.circleMarker([stop.coordinates.lat, stop.coordinates.lng], {
+                            radius: 10,
+                            fillColor: color,
+                            color: "white",
+                            weight: 2,
+                            fillOpacity: 1
+                        }).addTo(map);
+
+                        const label = stopIndex === 0 ? 'Start' : `${stop.address} (${stop.tbas.length} pkgs)`;
+                        marker.bindPopup(`<b>Driver ${index+1} - Stop ${stopIndex}</b><br>${label}`);
+                        mapElements.push(marker);
+                    });
+
+                    const routePath = route.map(stop => [stop.coordinates.lat, stop.coordinates.lng]);
+                    const routePolyline = L.polyline(routePath, { color: color, opacity: 0.8, weight: 4 }).addTo(map);
+                    
+                    mapElements.push(routePolyline);
+                    allPoints.push(...routePath);
+                });
+
+                if (allPoints.length > 0) {
+                    map.fitBounds(L.latLngBounds(allPoints), { padding: [50, 50] });
+                }
+            })
+            .catch(err => {
+                console.error("Error fetching routes:", err);
+                findButton.textContent = 'Find Routes';
+                findButton.disabled = false;
+                alert(`Error calculating routes. Check the server console.\nDetails: ${err.message}`);
+            });
+        });
+    </script>
+</body>
+</html>
