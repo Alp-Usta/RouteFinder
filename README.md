@@ -6,7 +6,7 @@ This application attempts to improve the dispatch process for leftover packages 
 
 ## **The Attempt**
 
-This project directly addresses three major issues impacting the DPH9 station:
+This project directly addresses three major issues impacting the station:
 
 1. **Inefficient Dispatch Bottleneck:** Tries to fix the delays caused by manually sorting and grouping packages.  
 2. **Flex Driver Fairness:**Attempts to fix unbalanced, hand-created routes with **impartial, data-driven assignments**, directly addressing driver complaints.  
