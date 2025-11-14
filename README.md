@@ -2,7 +2,7 @@
 
 # 🚀 RouteFinder: A Real-World Logistics Optimizer
 
-This isn't just a portfolio project; it's a real-world solution I built to solve a major inefficiency I faced every day at my job as an Amazon Warehouse Associate at DPH9.
+This isn't just a portfolio project; it's a real-world solution I built to solve a major inefficiency I faced every day at my job as an warehouse associate at Amazon.
 
 ## The Problem: "Leftover Packages"
 
