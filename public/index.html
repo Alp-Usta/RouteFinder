@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteFinder v5 (Dispatcher View)</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            margin: 0;
+            padding: 20px;
+            color: #EFEFEF;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: auto;
+            background: #1E1E1E;
+            border-radius: 12px;
+            border: 1px solid #3B3B3B;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: #282828;
+            color: white;
+            padding: 20px 30px;
+            text-align: center;
+            border-bottom: 1px solid #3B3B3B;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+
+        /* Layout */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            height: 800px;
+        }
+
+        .sidebar {
+            padding: 20px;
+            border-right: 1px solid #3B3B3B;
+            overflow-y: auto;
+            background: #181818;
+        }
+
+        .map-area {
+            position: relative;
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+            background-color: #242f3e;
+        }
+
+        /* Controls */
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #B3B3B3;
+            font-size: 0.9em;
+        }
+
+        input,
+        select {
+            padding: 10px;
+            border: 1px solid #535353;
+            background-color: #3B3B3B;
+            color: #FFFFFF;
+            border-radius: 6px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        button {
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 5px;
+        }
+
+        .btn-action {
+            background-color: #fca311;
+            color: #121212;
+        }
+
+        .btn-action:hover {
+            background-color: #e89300;
+        }
+
+        .btn-secondary {
+            background-color: #2a9d8f;
+            color: white;
+        }
+
+        .btn-auto {
+            background-color: #7209b7;
+            color: white;
+        }
+
+        .btn-reset {
+            background-color: #444;
+            color: white;
+            margin-bottom: 10px;
+        }
+
+        /* Driver List Items */
+        .driver-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #333;
+            font-size: 0.9em;
+            background: #222;
+            margin-bottom: 2px;
+            border-radius: 4px;
+        }
+
+        /* Better Remove Button */
+        .btn-remove-driver {
+            background-color: #d90429;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1.1em;
+            width: auto;
+            margin: 0;
+            line-height: 1;
+        }
+
+        .btn-remove-driver:hover {
+            background-color: #ef233c;
+        }
+
+        /* Scrollable Driver List */
+        #driverList {
+            max-height: 180px;
+            overflow-y: auto;
+            margin-top: 5px;
+            background: #181818;
+            border: 1px solid #333;
+            border-radius: 4px;
+            scroll-behavior: smooth;
+        }
+
+        /* Accordion Groups */
+        .group-header {
+            background-color: #282828;
+            color: #fff;
+            padding: 10px;
+            cursor: pointer;
+            border: 1px solid #444;
+            border-radius: 6px;
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .group-header:hover {
+            background-color: #333;
+        }
+
+        .group-content {
+            display: none;
+            padding-left: 10px;
+            border-left: 2px solid #444;
+            margin-bottom: 10px;
+        }
+
+        .group-content.active {
+            display: block;
+        }
+
+        /* Driver Card in List */
+        .driver-card {
+            background: #222;
+            margin-top: 5px;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 1px solid #333;
+            transition: transform 0.1s;
+            position: relative;
+        }
+
+        .driver-card:hover {
+            background: #2a2a2a;
+            border-color: #fca311;
+        }
+
+        .driver-card.selected {
+            border-color: #fca311;
+            background: #332b00;
+        }
+
+        /* Copy Hover Effect */
+        .driver-name-header {
+            padding: 4px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            display: inline-block;
+            width: 100%;
+        }
+
+        .driver-name-header:hover {
+            background-color: #444;
+        }
+
+        /* TBA List */
+        .tba-row {
+            font-size: 0.8em;
+            color: #aaa;
+            margin-left: 10px;
+            border-left: 1px solid #444;
+            padding-left: 5px;
+            margin-top: 2px;
+        }
+
+        /* Scanner Box */
+        .scanner-overlay {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #fca311;
+            width: 300px;
+            text-align: center;
+            backdrop-filter: blur(5px);
+        }
+
+        #scanInput {
+            font-size: 1.2em;
+            text-align: center;
+            border-color: #fca311;
+        }
+
+        #scanResult {
+            margin-top: 10px;
+            min-height: 60px;
+        }
+
+        .rec-tag {
+            background-color: #2a9d8f;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 0.7em;
+            margin-left: 5px;
+        }
+
+        footer {
+            background: #181818;
+            padding: 10px;
+            text-align: center;
+            font-size: 0.8em;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>RouteFinder v5</h1>
+        </header>
+
+        <div class="main-layout">
+            <div class="sidebar">
+                <div id="controls">
+                    <div class="form-group">
+                        <label>1. Packages</label>
+                        <input type="file" id="csvFile" accept=".csv" multiple>
+                        <div id="fileInfo" style="font-size:0.8em; color:#aaa; margin-top:2px;"></div>
+
+                        <label style="margin-top:5px; font-size:0.8em; color:#9b5de5;">+ Upload Bags (Optional)</label>
+                        <input type="file" id="bagFile" accept=".csv" multiple>
+                        <div id="bagList" style="margin-top:5px; font-size:0.8em; color:#ccc;"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>2. Fleet</label>
+                        <div style="display:flex; gap:5px;">
+                            <select id="autoMaxBlock">
+                                <option value="2">Max: 2h</option>
+                                <option value="2.5">Max: 2.5h</option>
+                                <option value="3">Max: 3h</option>
+                                <option value="3.5">Max: 3.5h</option>
+                                <option value="4" selected>Max: 4h</option>
+                            </select>
+                            <button id="autoPlan" class="btn-auto">Auto-Plan</button>
+                        </div>
+                        <button id="findRoutes" class="btn-action">Calculate</button>
+                    </div>
+
+                    <details open
+                        style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
+                        <summary style="cursor:pointer; font-size:0.9em; color:#aaa;">Manual Driver Add</summary>
+                        <div style="display:flex; gap:5px; margin-top:5px;">
+                            <select id="blockTime">
+                                <option value="2">2h</option>
+                                <option value="2.5">2.5h</option>
+                                <option value="3">3h</option>
+                                <option value="3.5">3.5h</option>
+                                <option value="4">4h</option>
+                            </select>
+                            <button id="addDriver" class="btn-secondary">+ Add</button>
+                        </div>
+                        <div style="font-size: 0.7em; color: #666; margin-top: 3px; text-align: right;">
+                            Shortcuts: (=) Add, (-) Remove
+                        </div>
+                        <div id="driverList"></div>
+                    </details>
+                </div>
+
+                <div id="resultsArea" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <h3 style="margin:0;">Routes</h3>
+                        <button class="btn-reset" onclick="resetMapFilter()"
+                            style="width:auto; padding:5px 10px; font-size:0.8em;">Show All Map</button>
+                    </div>
+                    <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy •
+                        Click Card to Filter</div>
+                    <div id="routeList"></div>
+                    <div style="margin-top:20px;">
+                        <button id="exportScannerCsv" class="btn-secondary">Export Lookup CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="map-area">
+                <div id="map"></div>
+
+                <div id="scanPanel" class="scanner-overlay" style="display:none;">
+                    <div style="font-weight:bold; color:#fca311; margin-bottom:5px;">SCANNER READY</div>
+                    <input type="text" id="scanInput" placeholder="Scan Barcode (Last 4)...">
+                    <div id="scanResult">
+                        <div id="driverDisplay" style="font-size: 40px; font-weight: bold; color: #fff;">--</div>
+                        <div id="stopDisplay" style="font-size: 16px; color: #aaa;">Waiting...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            &copy; 2025 RouteFinder - Developed by Alp Usta - Amazon @ustaseza
+        </footer>
+    </div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        // STATE
+        let map;
+        let mapLayers = []; // Stores { layer: L.Layer, driverId: X, hours: Y }
+        let loosePackages = [];
+        let bagFiles = [];
+        let drivers = [];
+        let allCalculatedRoutes = [];
+        let tbaLookup = {};
+
+        // INIT MAP
+        function initMap() {
+            if (map) map.remove();
+            map = L.map('map').setView([40.101, -75.305], 9);
+            L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; Stadia Maps'
+            }).addTo(map);
+        }
+        window.onload = initMap;
+
+        // CSV PARSING
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n');
+            if (lines.length < 1) return null;
+            const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
+            const pIdx = headers.indexOf('postal');
+            const tIdx = headers.indexOf('tba');
+            if (pIdx === -1 || tIdx === -1) return null;
+            const pkgs = [];
+            for (let i = 1; i < lines.length; i++) {
+                if (!lines[i].trim()) continue;
+                const d = lines[i].split(',');
+                pkgs.push({ postal: d[pIdx].trim(), tba: d[tIdx].trim() });
+            }
+            return pkgs;
+        }
+
+        // HANDLERS
+        document.getElementById('csvFile').addEventListener('change', (e) => {
+            const f = e.target.files[0];
+            if (!f) return;
+            const r = new FileReader();
+            r.onload = (evt) => {
+                const res = parseCSV(evt.target.result);
+                if (res) { loosePackages = res; document.getElementById('fileInfo').textContent = `${res.length} pkgs loaded`; }
+            };
+            r.readAsText(f);
+        });
+
+        // --- BAG FILE HANDLER ---
+        document.getElementById('bagFile').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+
+            Array.from(files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    const res = parseCSV(evt.target.result);
+                    if (res) {
+                        bagFiles.push({ name: file.name, items: res });
+                        renderBagList();
+                    }
+                };
+                reader.readAsText(file);
+            });
+            document.getElementById('bagFile').value = "";
+        });
+
+        function renderBagList() {
+            const l = document.getElementById('bagList');
+            l.innerHTML = '';
+            bagFiles.forEach((b, i) => {
+                l.innerHTML += `
+                    <div style="display:flex; justify-content:space-between; margin-top:2px; padding:2px; border-bottom:1px solid #333;">
+                        <span>📦 ${b.name} (${b.items.length})</span>
+                        <span style="color:#d90429;cursor:pointer;font-weight:bold;" onclick="removeBag(${i})">x</span>
+                    </div>`;
+            });
+        }
+        window.removeBag = (i) => { bagFiles.splice(i, 1); renderBagList(); };
+
+        // --- UPDATED DRIVER LOGIC (Manual & Shortcuts) ---
+
+        function addManualDriver() {
+            const blockSelect = document.getElementById('blockTime');
+            const h = parseFloat(blockSelect.value);
+
+            drivers.push({
+                id: drivers.length + 1,
+                maxHours: h,
+                maxPackages: 45
+            });
+
+            renderDriverList();
+
+            // Auto-scroll to bottom
+            const container = document.getElementById('driverList');
+            setTimeout(() => {
+                container.scrollTop = container.scrollHeight;
+            }, 0);
+        }
+
+        // Global function for removal (accessed by onclick)
+        window.removeDriver = (index = -1) => {
+            if (drivers.length === 0) return;
+
+            if (index > -1) {
+                // Remove specific
+                drivers.splice(index, 1);
+            } else {
+                // Remove last (for shortcut)
+                drivers.pop();
+            }
+            reindexDrivers();
+            renderDriverList();
+        };
+
+        function reindexDrivers() {
+            drivers.forEach((d, i) => {
+                d.id = i + 1;
+            });
+        }
+
+        function renderDriverList() {
+            const l = document.getElementById('driverList');
+            l.innerHTML = '';
+
+            drivers.forEach((d, i) => {
+                const div = document.createElement('div');
+                div.className = 'driver-item';
+                div.innerHTML = `
+                    <span style="display:flex; align-items:center;">
+                        <span style="color:#fca311; font-weight:bold; margin-right:8px;">D${d.id}</span> 
+                        <span>${d.maxHours}h Block</span>
+                    </span>
+                    <button class="btn-remove-driver" onclick="removeDriver(${i})" title="Remove Driver">×</button>
+                `;
+                l.appendChild(div);
+            });
+
+            // Visual feedback on the Calculate button
+            const calcBtn = document.getElementById('findRoutes');
+            if (drivers.length > 0) {
+                calcBtn.textContent = `Calculate (${drivers.length} Drivers)`;
+                calcBtn.style.opacity = '1';
+            } else {
+                calcBtn.textContent = 'Calculate';
+            }
+        }
+
+        document.getElementById('addDriver').addEventListener('click', addManualDriver);
+
+        // Keyboard Shortcuts
+        document.addEventListener('keydown', (e) => {
+            const activeTag = document.activeElement.tagName.toLowerCase();
+            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
+
+            // Equal Sign (=) or Numpad Plus (+) to ADD
+            if (e.key === '=' || e.key === '+') {
+                e.preventDefault();
+                addManualDriver();
+            }
+
+            // Minus Sign (-) or Numpad Subtract (-) to REMOVE LAST
+            if (e.key === '-' || e.key === '_') {
+                e.preventDefault();
+                removeDriver(); // Removes last entry
+            }
+        });
+
+        // --- END DRIVER LOGIC ---
+
+        // --- BACKEND CONNECTION (UPDATED FOR STRING MODE) ---
+
+        // AUTO PLAN BUTTON
+        document.getElementById('autoPlan').addEventListener('click', () => {
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert("Upload CSV first");
+            const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
+            document.getElementById('autoPlan').textContent = 'Thinking...';
+
+            let vFleet = [];
+            for (let i = 0; i < 200; i++) vFleet.push({ id: i + 1, maxHours: maxH, maxPackages: 48 });
+
+            // CHANGED: Explicitly pass 'auto'
+            runBackend(vFleet, 'auto', maxH);
+        });
+
+        // CALCULATE BUTTON
+        document.getElementById('findRoutes').addEventListener('click', () => {
+            if (drivers.length === 0) return alert("Add drivers or use Auto-Plan");
+            document.getElementById('findRoutes').textContent = 'Calculating...';
+            // CHANGED: Explicitly pass 'manual'
+            runBackend(drivers, 'manual', 0);
+        });
+
+        // CHANGED: Function now accepts 'mode' string directly
+        function runBackend(driverSet, mode, baseMax) {
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    loosePackages,
+                    bags: bagFiles,
+                    drivers: driverSet,
+                    mode: mode // Sends 'manual' or 'auto'
+                })
+            })
+                .then(res => res.json())
+                .then(routes => {
+                    const active = routes.filter(r => r.route.length > 0);
+                    allCalculatedRoutes = active;
+
+                    // CHECK: Logic now checks string equality
+                    if (mode === 'auto') {
+                        // Smart Resize Logic
+                        const blocks = [2, 2.5, 3, 3.5, 4];
+                        drivers = [];
+                        active.forEach((r, i) => {
+                            if (r.driverId.toString().includes("OVERFLOW")) {
+                                drivers.push({ id: "OVERFLOW", maxHours: 0, maxPackages: 0 });
+                                return;
+                            }
+                            const needed = r.totalHours; // Safe buffer
+                            let rec = baseMax;
+                            for (let b of blocks) if (b >= needed) { rec = b; break; }
+                            if (rec > baseMax) rec = baseMax;
+
+                            r.driverMax = rec; // Update result for display
+                            r.driverId = i + 1; // Re-index
+                            drivers.push({ id: i + 1, maxHours: baseMax, maxPackages: 48, recommendedHours: rec });
+                        });
+                        renderDriverList();
+                        alert(`Plan: ${active.length} Routes Generated.`);
+                    }
+
+                    document.getElementById('autoPlan').textContent = 'Auto-Plan';
+                    // Reset button text
+                    const dLen = drivers.length;
+                    document.getElementById('findRoutes').textContent = dLen > 0 ? `Calculate (${dLen} Drivers)` : 'Calculate';
+
+                    document.getElementById('resultsArea').style.display = 'block';
+                    document.getElementById('scanPanel').style.display = 'block';
+                    document.getElementById('scanInput').focus();
+
+                    renderGroupedView(active);
+                    buildMap(active);
+                    buildLookup(active);
+                })
+                .catch(e => alert(e.message));
+        }
+
+        // --- GROUPED VIEW WITH CLICK-TO-COPY ---
+        function renderGroupedView(routes) {
+            const container = document.getElementById('routeList');
+            container.innerHTML = '';
+
+            const groups = {};
+            routes.forEach(r => {
+                let key = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(r);
+            });
+
+            Object.keys(groups).sort().forEach(key => {
+                const groupRoutes = groups[key];
+                const headerText = key === "OVERFLOW" ? "Unassigned" : `${key} Hour Blocks (${groupRoutes.length})`;
+                const color = key === "OVERFLOW" ? "red" : "#2a9d8f";
+
+                // Header
+                const header = document.createElement('div');
+                header.className = 'group-header';
+                header.style.borderColor = color;
+                header.innerHTML = `<span>${headerText}</span> <span style="font-size:0.8em">▼</span>`;
+
+                // Content
+                const content = document.createElement('div');
+                content.className = 'group-content';
+
+                header.onclick = () => { toggleAccordion(content); filterMapByGroup(key); };
+
+                groupRoutes.forEach(r => {
+                    const card = document.createElement('div');
+                    card.className = 'driver-card';
+
+                    let pkgCount = 0;
+                    let allTbas = [];
+                    r.route.forEach((s, i) => {
+                        if (i > 0) {
+                            pkgCount += s.tbas.length;
+                            allTbas.push(...s.tbas);
+                        }
+                    });
+
+                    const dName = key === "OVERFLOW" ? "Overflow" : `Driver ${r.driverId}`;
+
+                    // Name Element (Click to Copy)
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'driver-name-header';
+                    nameEl.style.fontWeight = 'bold';
+                    nameEl.style.color = key === 'OVERFLOW' ? 'red' : '#fca311';
+                    nameEl.style.cursor = 'copy';
+                    nameEl.title = 'Click Name to Copy TBAs';
+                    nameEl.innerHTML = `${dName} <span style="font-size:0.8em; color:#888;">📋</span>`;
+
+                    nameEl.onclick = (e) => {
+                        e.stopPropagation(); // Stop card click
+                        const textToCopy = allTbas.join('\r\n');
+                        navigator.clipboard.writeText(textToCopy).then(() => {
+                            const originalHTML = nameEl.innerHTML;
+                            nameEl.innerHTML = `${dName} ✅`;
+                            setTimeout(() => nameEl.innerHTML = originalHTML, 1000);
+                        });
+                    };
+
+                    // Info Element
+                    const infoEl = document.createElement('div');
+                    infoEl.style.fontSize = '0.85em';
+                    infoEl.style.color = '#ccc';
+                    infoEl.style.marginTop = '2px';
+                    infoEl.innerText = `${pkgCount} Pkgs • ${formatHours(r.totalHours)} Est`;
+
+                    // List Element
+                    const listEl = document.createElement('div');
+                    listEl.style.marginTop = '5px';
+                    listEl.style.paddingTop = '5px';
+                    listEl.style.borderTop = '1px solid #444';
+                    let listHtml = '';
+                    allTbas.forEach(t => listHtml += `<div class="tba-row">${t}</div>`);
+                    listEl.innerHTML = listHtml;
+
+                    card.appendChild(nameEl);
+                    card.appendChild(infoEl);
+                    card.appendChild(listEl);
+
+                    // Map Filter Logic (Click card background)
+                    card.onclick = () => {
+                        filterMapByDriver(r.driverId);
+                        document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+                        card.classList.add('selected');
+                    };
+
+                    content.appendChild(card);
+                });
+
+                container.appendChild(header);
+                container.appendChild(content);
+            });
+        }
+
+        function toggleAccordion(el) {
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
+
+        // --- MAP FUNCTIONS ---
+        function buildMap(routes) {
+            mapLayers.forEach(o => map.removeLayer(o.layer));
+            mapLayers = [];
+            const colors = ['#d90429', '#0077b6', '#52b69a', '#fca311', '#8338ec', '#fb5607'];
+
+            let allPoints = [];
+
+            routes.forEach((r, idx) => {
+                const color = r.driverId.toString().includes("OVERFLOW") ? "#666" : colors[idx % colors.length];
+                const groupKey = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
+
+                r.route.forEach((stop, i) => {
+                    if (i === 0 && !r.driverId.toString().includes("OVERFLOW")) return;
+
+                    // CHECK IF BAG
+                    const isBag = stop.isBag; // This comes from backend
+                    const markerColor = isBag ? '#f1faee' : color;
+                    const markerRadius = isBag ? 10 : 8;
+                    const strokeColor = isBag ? color : 'white';
+
+                    const m = L.circleMarker([stop.coordinates.lat, stop.coordinates.lng], {
+                        radius: markerRadius,
+                        fillColor: markerColor,
+                        color: strokeColor,
+                        weight: isBag ? 3 : 1,
+                        fillOpacity: 0.9
+                    }).bindPopup(stop.address);
+
+                    m.addTo(map);
+                    mapLayers.push({ layer: m, driverId: r.driverId, groupKey: groupKey });
+                    allPoints.push([stop.coordinates.lat, stop.coordinates.lng]);
+                });
+            });
+            if (allPoints.length) map.fitBounds(allPoints);
+        }
+
+        function filterMapByGroup(groupKey) {
+            mapLayers.forEach(obj => {
+                if (obj.groupKey === groupKey) obj.layer.addTo(map);
+                else map.removeLayer(obj.layer);
+            });
+        }
+
+        function filterMapByDriver(dId) {
+            mapLayers.forEach(obj => {
+                if (obj.driverId === dId) obj.layer.addTo(map);
+                else map.removeLayer(obj.layer);
+            });
+        }
+
+        window.resetMapFilter = () => {
+            mapLayers.forEach(obj => obj.layer.addTo(map));
+            document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+        };
+
+        // --- UTILS ---
+        function formatHours(h) { const hr = Math.floor(h); const mn = Math.round((h - hr) * 60); return `${hr}h ${mn}m`; }
+
+        function buildLookup(routes) {
+            tbaLookup = {};
+            // NOTE: Storing as { d: driverId, s: stopIndex, z: address }
+            routes.forEach(r => r.route.forEach((s, i) => {
+                if (i > 0) s.tbas.forEach(t => tbaLookup[t.trim().toUpperCase()] = { d: r.driverId, s: i, z: s.address });
+            }));
+        }
+
+        // --- FIXED SCANNER LOGIC ---
+        document.getElementById('scanInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const val = e.target.value.trim().toUpperCase();
+                e.target.value = ''; // Reset input immediately
+
+                const dDisp = document.getElementById('driverDisplay');
+                const sDisp = document.getElementById('stopDisplay');
+
+                // 1. Try Exact Match
+                let info = tbaLookup[val];
+                let foundTba = val;
+
+                // 2. If not found, try "Ends With" (Last 3, 4, etc.)
+                if (!info) {
+                    const allTbas = Object.keys(tbaLookup);
+                    const matches = allTbas.filter(tba => tba.endsWith(val));
+
+                    if (matches.length === 1) {
+                        foundTba = matches[0];
+                        info = tbaLookup[foundTba];
+                    } else if (matches.length > 1) {
+                        dDisp.style.color = '#fca311';
+                        dDisp.textContent = 'MULTIPLE';
+                        sDisp.textContent = `Found ${matches.length} matches ending in "${val}". Scan more digits.`;
+                        window.speechSynthesis.cancel();
+                        window.speechSynthesis.speak(new SpeechSynthesisUtterance("Multiple matches"));
+                        return;
+                    }
+                }
+
+                // 3. Display Result
+                if (info) {
+                    dDisp.style.color = '#2a9d8f';
+                    const isOverflow = info.d.toString().includes("OVERFLOW");
+                    dDisp.textContent = isOverflow ? "OVERFLOW" : `DRIVER ${info.d}`;
+                    sDisp.innerHTML = `Stop #${info.s}<br><span style="font-size:0.8em; color:#888;">${foundTba}</span>`;
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(isOverflow ? "Overflow" : "Driver " + info.d));
+                } else {
+                    dDisp.style.color = '#d90429';
+                    dDisp.textContent = 'NOT FOUND';
+                    sDisp.textContent = 'Check TBA or Overflow';
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Not found"));
+                }
+            }
+        });
+
+        document.getElementById('scanInput').addEventListener('blur', () => setTimeout(() => document.getElementById('scanInput').focus(), 100));
+
+        document.getElementById('exportScannerCsv').addEventListener('click', () => {
+            let csv = "TBA,DRIVER,STOP,ZIP\n";
+            allCalculatedRoutes.forEach(r => {
+                r.route.forEach((s, i) => {
+                    if (i > 0) s.tbas.forEach(t => csv += `${t.trim()},${r.driverId},${i},${s.address}\n`);
+                });
+            });
+            const b = new Blob([csv], { type: 'text/csv' });
+            const u = URL.createObjectURL(b);
+            const a = document.createElement('a'); a.href = u; a.download = `Lookup.csv`; a.click();
+        });
+    </script>
+</body>
+
+</html>
