@@ -1,4 +1,5 @@
 
+<img width="1231" height="790" alt="screenshot-2025-12-22_22-38-01" src="https://github.com/user-attachments/assets/0a05fc09-6892-4517-bd8d-027ee18eaa9a" />
 
 # 🚀 RouteFinder: A Real-World Logistics Optimizer
 
