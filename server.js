@@ -60,7 +60,9 @@ const geocodeAddresses = async (addresses) => {
 
 const getDistanceMatrix = async (points) => {
     const n = points.length;
+    const UNREACHABLE = 99999;
     let matrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    let failedRoutes = 0;
     try {
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
@@ -72,9 +74,18 @@ const getDistanceMatrix = async (points) => {
                 try {
                     const response = await axios.get(url, { timeout: 2000 });
                     if (response.data.paths) matrix[i][j] = Math.round(response.data.paths[0].time / 1000);
-                    else matrix[i][j] = 600;
-                } catch (e) { matrix[i][j] = 600; }
+                    else {
+                        matrix[i][j] = UNREACHABLE;
+                        failedRoutes++;
+                    }
+                } catch (e) { 
+                    matrix[i][j] = UNREACHABLE;
+                    failedRoutes++;
+                }
             }
+        }
+        if (failedRoutes > 0) {
+            console.log(`[Matrix] Warning: ${failedRoutes} route calculations failed`);
         }
     } catch (error) { console.error(error); }
     return matrix;
@@ -83,8 +94,12 @@ const getDistanceMatrix = async (points) => {
 const optimizeRouteWith2Opt = (route, matrix) => {
     if (route.length < 4) return route;
     let improved = true;
-    while (improved) {
+    let iterations = 0;
+    const maxIterations = 100;
+    
+    while (improved && iterations < maxIterations) {
         improved = false;
+        iterations++;
         for (let i = 1; i < route.length - 2; i++) {
             for (let j = i + 1; j < route.length - 1; j++) {
                 const p1_idx = route[i - 1].matrix_index;
@@ -106,293 +121,505 @@ const optimizeRouteWith2Opt = (route, matrix) => {
     return route;
 };
 
-const splitBigZips = (zips, maxPerDriver) => {
-    const splitZips = [];
-    zips.forEach(zip => {
-        if (zip.isBag) {
-            splitZips.push(zip);
-            return;
-        }
-        const pkgCount = zip.tbas.length;
-        if (pkgCount > maxPerDriver) {
-            let remainingTbas = [...zip.tbas];
-            while (remainingTbas.length > 0) {
-                const chunk = remainingTbas.splice(0, maxPerDriver);
-                splitZips.push({ ...zip, tbas: chunk, matrix_index: zip.matrix_index });
-            }
-        } else {
-            splitZips.push(zip);
-        }
-    });
-    return splitZips;
+// --- CONSTANTS ---
+const VAN_CAPACITY = 48;
+const SECONDS_PER_PKG = 180;      // 3 min per package
+const UNREACHABLE = 99999;
+const TRAFFIC_HIGHWAY = 1.0;
+const TRAFFIC_CITY = 1.1;
+
+// --- TUNING (ADJUST THESE FOR SPARSENESS) ---
+// Base values for 2-hour drivers (TIGHTEST - close to warehouse)
+const BASE_MAX_DIAMETER = 1200;    // 20 min
+const BASE_STEP_LIMIT = 720;      // 12 min  hops
+const BASE_STEM_RATIO = 0.75;     // first stop 
+
+// Scaling per extra hour above 2h
+const DIAMETER_PER_HOUR = 300;    // +5 min diameter per extra hour (allows 4h drivers to cover wide areas)
+const STEP_PER_HOUR = 120;        // +2 min step per extra hour 
+const STEM_RATIO_PER_HOUR = -0.02;// DECREASE stem ratio for longer routes (4h routes can afford less % on stem)
+
+const SAME_AREA_BONUS = 0.6;      // Stronger pull for same ZIP (was 0.7)
+const PKG_COUNT_BONUS = 0.20;     // 20% bonus per package (was 15%). Prioritize lockers/apartments.
+
+// Helper to get constraints based on driver hours
+const getConstraints = (hours) => {
+    const extraHours = Math.max(0, hours - 2);
+    const maxDiameter = BASE_MAX_DIAMETER + (extraHours * DIAMETER_PER_HOUR);
+    const stepLimit = BASE_STEP_LIMIT + (extraHours * STEP_PER_HOUR);
+    const stemRatio = Math.min(BASE_STEM_RATIO + (extraHours * STEM_RATIO_PER_HOUR), 0.30);
+    
+    return { maxDiameter, stepLimit, stemRatio };
 };
 
-// --- ROUTING LOGIC: ADAPTIVE V5.5 (STABLE + SAME AREA PRIORITY) ---
+// CONSTRAINTS BY HOURS:
+// 2.0h: diameter=420s (7min), step=240s (4min), stem=14min max
+// 2.5h: diameter=480s (8min), step=270s (4.5min), stem=18min max
+// 3.0h: diameter=540s (9min), step=300s (5min), stem=22min max
+// 3.5h: diameter=600s (10min), step=330s (5.5min), stem=25min max
+// 4.0h: diameter=660s (11min), step=360s (6min), stem=29min max
+
+// =====================================================
+// V10: DENSITY-FIRST ROUTING
+// - Clusters tight, nearby stops together
+// - AUTO: Fills one driver completely before starting next
+// - MANUAL: Maximizes packages with tight clusters
+// =====================================================
+
 const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode = 'auto') => {
     if (regionalZips.length === 0 || driverList.length === 0) return [];
-
+    
     regionalZips.forEach((wp, i) => { wp.matrix_index = i + 1; });
-
-    // 1. Sort Drivers (Best drivers first)
-    const sortedDrivers = [...driverList].sort((a, b) => b.maxHours - a.maxHours);
-
-    // --- DETERMINE CAP STRATEGY ---
-    const VAN_CAPACITY = 48;
-    let DYNAMIC_CAP = VAN_CAPACITY;
+    
     const totalPackages = regionalZips.reduce((sum, zip) => sum + (zip.tbas ? zip.tbas.length : 0), 0);
-
-    if (mode === 'manual') {
-        const fairShare = Math.ceil(totalPackages / driverList.length);
-        DYNAMIC_CAP = Math.max(1, Math.min(VAN_CAPACITY, fairShare));
-        console.log(`[Router] MANUAL MODE. Total: ${totalPackages}, Drivers: ${driverList.length}, Cap: ${DYNAMIC_CAP}`);
-    } else {
-        console.log(`[Router] AUTO MODE. Greedy fill to ${VAN_CAPACITY}.`);
-    }
-
-    // 2. Pre-Split
-    let splitLimit = (mode === 'manual') ? DYNAMIC_CAP : VAN_CAPACITY;
-    let unassigned = splitBigZips(regionalZips, splitLimit).map(wp => ({
-        ...wp,
-        isAssigned: false
-    }));
-
-    let finalRoutes = [];
-
-    // --- TUNING CONSTANTS ---
-    const SECONDS_PKG = 180;
-    const GRACE_PERIOD_SECONDS = 300;
-    const DIAMETER_STANDARD = 600;
-    const DIAMETER_TIER1 = 900;
-    const DIAMETER_TIER2 = 1200;
-    const STEP_STANDARD = 420;
-    const STEP_TIER1 = 720;
-    const STEP_TIER2 = 900;
-    const TRAFFIC_HIGHWAY = 1.0;
-    const TRAFFIC_CITY = 1.1;
-
-    const calculateServiceTime = (pkgCount) => pkgCount * SECONDS_PKG;
-
-    // --- THE LOOP ---
-    sortedDrivers.forEach(driver => {
-        if (unassigned.filter(u => !u.isAssigned).length === 0) return;
-
-        let currentRoute = [];
-        let currentPkgs = 0;
-        let currentDriveTime = 0;
-        let currentServiceTime = 0;
-
-        // A. Find "Seed" Stop
-        const SEED_RADIUS = (mode === 'manual') ? 7200 : 3600;
-
-        let seedStop = null;
-        let maxDist = -1;
-
-        const bags = unassigned.filter(u => !u.isAssigned && u.isBag);
-        const candidates = bags.length > 0 ? bags : unassigned.filter(u => !u.isAssigned);
-
-        candidates.forEach(stop => {
-            const dist = matrix[0][stop.matrix_index];
-            if (dist > SEED_RADIUS) return;
-            if (dist > maxDist) {
-                maxDist = dist;
-                seedStop = stop;
+    
+    console.log(`\n[Router V10] Mode: ${mode.toUpperCase()} | DENSITY-FIRST`);
+    console.log(`[Router V10] ${totalPackages} packages across ${regionalZips.length} stops`);
+    
+    let unassigned = regionalZips.map(wp => ({ ...wp, isAssigned: false }));
+    
+    // =====================================================
+    // FIND BEST SEED: Closest to warehouse with most packages
+    // (NOT farthest - we want to build dense clusters outward)
+    // =====================================================
+    const findBestSeed = (excludeIndices, maxStemTime, stepLimit) => {
+        const available = unassigned.filter(u => {
+            if (u.isAssigned) return false;
+            if (excludeIndices.has(u.matrix_index)) return false;
+            const dist = matrix[0][u.matrix_index];
+            return dist < UNREACHABLE && dist <= maxStemTime;
+        });
+        
+        if (available.length === 0) return null;
+        
+        // Prioritize bags first
+        const bags = available.filter(u => u.isBag);
+        const pool = bags.length > 0 ? bags : available;
+        
+        // Score: prefer CLOSER to warehouse + MORE packages + DENSE area
+        let bestSeed = null;
+        let bestScore = Infinity;
+        
+        pool.forEach(pkg => {
+            const distFromWarehouse = matrix[0][pkg.matrix_index];
+            
+            // Base score is distance (lower = better)
+            let score = distFromWarehouse;
+            
+            // BONUS for more packages at this location
+            score -= pkg.tbas.length * 60; // Each package reduces score by 60s
+            
+            // BONUS for having nearby unassigned packages (dense area)
+            let nearbyPackages = 0;
+            available.forEach(other => {
+                if (other.matrix_index !== pkg.matrix_index) {
+                    const dist = matrix[pkg.matrix_index][other.matrix_index];
+                    if (dist < stepLimit) {
+                        nearbyPackages += other.tbas.length;
+                    }
+                }
+            });
+            score -= nearbyPackages * 30; // Nearby packages reduce score
+            
+            if (score < bestScore) {
+                bestScore = score;
+                bestSeed = pkg;
             }
         });
-
-        if (!seedStop) return;
-
-        // Check Seed Validity
-        const rawSeedDrive = matrix[0][seedStop.matrix_index];
-        const seedDrive = rawSeedDrive * TRAFFIC_HIGHWAY;
-        const seedService = calculateServiceTime(seedStop.tbas.length);
-        const maxSeconds = (driver.maxHours * 3600) + GRACE_PERIOD_SECONDS;
-
-        if ((seedDrive + seedService) > maxSeconds) return;
-
-        // Assign Seed
-        currentRoute.push(seedStop);
-        seedStop.isAssigned = true;
-        currentPkgs += seedStop.tbas.length;
-        currentDriveTime += seedDrive;
-        currentServiceTime += seedService;
-
-        // B. Grow Route
-        let lookingForStops = true;
-
-        while (lookingForStops) {
-            if (currentPkgs >= DYNAMIC_CAP) {
-                lookingForStops = false;
-                break;
-            }
-
-            const lastStop = currentRoute[currentRoute.length - 1];
-
-            // *** MODIFIED FIND CANDIDATE: SAME AREA PRIORITY ***
-            const findCandidate = (stepLimit, diameterLimit) => {
-                let sameAreaMatches = [];
-                let otherMatches = [];
-
-                unassigned.forEach(candidate => {
-                    if (!candidate.isAssigned) {
-                        const addPkgs = candidate.tbas.length;
-
-                        // 1. HARD CAP CHECK
-                        if (currentPkgs + addPkgs > VAN_CAPACITY) return;
-
-                        // 2. DYNAMIC CAP CHECK
-                        if (mode === 'manual' && (currentPkgs + addPkgs > DYNAMIC_CAP)) return;
-
-                        // 3. STEP CHECK (Leash)
-                        const distFromLast = matrix[lastStop.matrix_index][candidate.matrix_index];
-                        if (distFromLast > stepLimit) return;
-
-                        // 4. DIAMETER CHECK
-                        for (let i = 0; i < currentRoute.length; i++) {
-                            const existing = currentRoute[i];
-                            const dist = matrix[existing.matrix_index][candidate.matrix_index];
-                            if (dist > diameterLimit) return;
-                        }
-
-                        // 5. TIME CHECK
-                        const driveStep = distFromLast * TRAFFIC_CITY;
-                        const serviceStep = calculateServiceTime(addPkgs);
-                        const totalEstSeconds = currentDriveTime + driveStep + currentServiceTime + serviceStep;
-
-                        if (totalEstSeconds > maxSeconds) return;
-
-                        // *** SORTING LOGIC ***
-                        // Check if candidate is in the SAME ZIP as the last stop
-                        if (candidate.address === lastStop.address) {
-                            sameAreaMatches.push({
-                                stop: candidate,
-                                drive: driveStep,
-                                service: serviceStep,
-                                dist: distFromLast
-                            });
-                        } else {
-                            otherMatches.push({
-                                stop: candidate,
-                                drive: driveStep,
-                                service: serviceStep,
-                                dist: distFromLast
-                            });
-                        }
+        
+        return bestSeed;
+    };
+    
+    // =====================================================
+    // GROW ROUTE: Add closest valid packages until full
+    // Uses hour-based constraints for diameter and step
+    // =====================================================
+    const growRoute = (driver, constraints) => {
+        const { maxDiameter, stepLimit } = constraints;
+        let growing = true;
+        
+        while (growing) {
+            const remaining = unassigned.filter(u => !u.isAssigned);
+            if (remaining.length === 0) break;
+            
+            const lastStop = driver.route[driver.route.length - 1];
+            
+            let bestCandidate = null;
+            let bestScore = Infinity;
+            
+            remaining.forEach(pkg => {
+                const addPkgs = pkg.tbas.length;
+                
+                // Capacity check
+                if (driver.currentPackages + addPkgs > VAN_CAPACITY) return;
+                
+                // Distance from last stop
+                const distFromLast = matrix[lastStop.matrix_index][pkg.matrix_index];
+                if (distFromLast >= UNREACHABLE) return;
+                
+                // *** STEP LIMIT - max hop distance (hour-scaled) ***
+                if (distFromLast > stepLimit) return;
+                
+                // *** DIAMETER CHECK - max spread of route (hour-scaled) ***
+                let violatesDiameter = false;
+                for (const idx of driver.assignedIndices) {
+                    if (matrix[idx][pkg.matrix_index] > maxDiameter) {
+                        violatesDiameter = true;
+                        break;
                     }
-                });
-
-                // *** PRIORITY DECISION ***
-                // If we have stops in the SAME area, we MUST pick the closest one of those.
-                // We ignore the "Other" list even if they are closer, until the "Same" list is empty.
-                if (sameAreaMatches.length > 0) {
-                    sameAreaMatches.sort((a, b) => a.dist - b.dist);
-                    return sameAreaMatches[0];
                 }
-
-                // If no same-area stops, fall back to closest neighbor (Efficiency)
-                if (otherMatches.length > 0) {
-                    otherMatches.sort((a, b) => a.dist - b.dist);
-                    return otherMatches[0];
+                if (violatesDiameter) return;
+                
+                // Time check
+                const addedDrive = distFromLast * TRAFFIC_CITY;
+                const addedService = addPkgs * SECONDS_PER_PKG;
+                const newTotalTime = driver.currentDriveTime + driver.currentServiceTime + addedDrive + addedService;
+                if (newTotalTime > driver.timeBudget) return;
+                
+                // *** SCORING: Density-first ***
+                let score = distFromLast;
+                
+                // SAME AREA BONUS (huge bonus for same ZIP)
+                if (pkg.address === lastStop.address) {
+                    score *= (1 - SAME_AREA_BONUS);
                 }
-
-                return null;
-            };
-
-            // Strategy Tiers
-            let bestCandidate = findCandidate(STEP_STANDARD, DIAMETER_STANDARD);
-            if (!bestCandidate && currentPkgs < 20) bestCandidate = findCandidate(STEP_TIER1, DIAMETER_TIER1);
-            if (!bestCandidate && currentPkgs < 10) bestCandidate = findCandidate(STEP_TIER2, DIAMETER_TIER2);
-
+                
+                // PACKAGE COUNT BONUS (prefer locations with more packages)
+                score *= (1 - Math.min(addPkgs * PKG_COUNT_BONUS, 0.5));
+                
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestCandidate = { pkg, addedDrive, addedService };
+                }
+            });
+            
             if (bestCandidate) {
-                const { stop, drive, service } = bestCandidate;
-                currentRoute.push(stop);
-                stop.isAssigned = true;
-                currentPkgs += stop.tbas.length;
-                currentDriveTime += drive;
-                currentServiceTime += service;
+                const { pkg, addedDrive, addedService } = bestCandidate;
+                
+                pkg.isAssigned = true;
+                driver.route.push(pkg);
+                driver.assignedIndices.add(pkg.matrix_index);
+                driver.currentPackages += pkg.tbas.length;
+                driver.currentDriveTime += addedDrive;
+                driver.currentServiceTime += addedService;
             } else {
-                lookingForStops = false;
+                growing = false;
             }
         }
-
-        // C. Optimize
-        if (currentRoute.length > 0) {
-            currentRoute.unshift({ ...startPoint, matrix_index: 0, tbas: ['WAREHOUSE'] });
-            const optimized = optimizeRouteWith2Opt([...currentRoute], matrix);
-
+    };
+    
+    // =====================================================
+    // AUTO MODE: Fill one driver completely, then add next
+    // Uses hour-based constraints for tighter 2h routes
+    // =====================================================
+    if (mode === 'auto') {
+        const maxHours = driverList[0].maxHours;
+        const constraints = getConstraints(maxHours);
+        const maxStemTime = maxHours * 3600 * constraints.stemRatio;
+        
+        console.log(`[AUTO] ${maxHours}h drivers | diameter: ${Math.round(constraints.maxDiameter/60)}min | step: ${Math.round(constraints.stepLimit/60)}min | stem: ${Math.round(maxStemTime/60)}min`);
+        
+        const finalRoutes = [];
+        let driverCount = 0;
+        
+        while (unassigned.filter(u => !u.isAssigned).length > 0) {
+            driverCount++;
+            
+            // Create new driver
+            const driver = {
+                id: driverCount,
+                maxHours: maxHours,
+                timeBudget: maxHours * 3600,
+                currentPackages: 0,
+                currentDriveTime: 0,
+                currentServiceTime: 0,
+                route: [],
+                assignedIndices: new Set()
+            };
+            
+            // Find seed (closest dense area)
+            const seed = findBestSeed(new Set(), maxStemTime, constraints.stepLimit);
+            
+            if (!seed) {
+                console.log(`[AUTO] No valid seed for Driver ${driverCount}, stopping`);
+                break;
+            }
+            
+            // Assign seed
+            const stemTime = matrix[0][seed.matrix_index] * TRAFFIC_HIGHWAY;
+            const serviceTime = seed.tbas.length * SECONDS_PER_PKG;
+            
+            seed.isAssigned = true;
+            driver.route.push(seed);
+            driver.assignedIndices.add(seed.matrix_index);
+            driver.currentPackages += seed.tbas.length;
+            driver.currentDriveTime += stemTime;
+            driver.currentServiceTime += serviceTime;
+            
+            console.log(`[AUTO] Driver ${driverCount} seeded: "${seed.address}" (${seed.tbas.length} pkgs) @ ${Math.round(stemTime/60)}min`);
+            
+            // Grow route until full (using hour-based constraints)
+            growRoute(driver, constraints);
+            
+            // Finalize this driver's route
+            if (driver.route.length > 0) {
+                const routeWithWarehouse = [{ ...startPoint, matrix_index: 0, tbas: ['WAREHOUSE'] }, ...driver.route];
+                const optimized = optimizeRouteWith2Opt([...routeWithWarehouse], matrix);
+                
+                let finalDrive = 0;
+                for (let i = 0; i < optimized.length - 1; i++) {
+                    const leg = matrix[optimized[i].matrix_index][optimized[i + 1].matrix_index];
+                    finalDrive += (i === 0) ? leg * TRAFFIC_HIGHWAY : leg * TRAFFIC_CITY;
+                }
+                const finalService = driver.currentPackages * SECONDS_PER_PKG;
+                const totalHours = (finalDrive + finalService) / 3600;
+                
+                console.log(`[AUTO] Driver ${driverCount} complete: ${driver.route.length} stops, ${driver.currentPackages} pkgs, ${totalHours.toFixed(2)}h`);
+                
+                finalRoutes.push({
+                    route: optimized,
+                    totalHours: totalHours,
+                    driverId: driverCount,
+                    driverMax: maxHours
+                });
+            }
+            
+            // Safety: prevent infinite loop
+            if (driverCount > 50) {
+                console.log(`[AUTO] Safety limit reached (50 drivers)`);
+                break;
+            }
+        }
+        
+        // Overflow
+        const overflow = unassigned.filter(u => !u.isAssigned);
+        if (overflow.length > 0) {
+            console.log(`[AUTO] OVERFLOW: ${overflow.length} packages`);
+            finalRoutes.push({
+                route: overflow,
+                totalHours: 0,
+                driverId: "OVERFLOW",
+                driverMax: 0
+            });
+        }
+        
+        return finalRoutes;
+    }
+    
+    // =====================================================
+    // MANUAL MODE: Distribute proportionally with tight clusters
+    // Focus on QUANTITY - deliver as many packages as possible
+    // 2h drivers get tight/close routes, 4h drivers can spread more
+    // =====================================================
+    else {
+        const totalHours = driverList.reduce((sum, d) => sum + d.maxHours, 0);
+        
+        // Initialize drivers with hour-based constraints
+        const drivers = driverList.map(d => {
+            const hourRatio = d.maxHours / totalHours;
+            let budget = Math.ceil(totalPackages * hourRatio);
+            budget = Math.min(budget, VAN_CAPACITY);
+            budget = Math.max(budget, 5);
+            
+            // Get hour-based constraints
+            const constraints = getConstraints(d.maxHours);
+            const maxStemTime = d.maxHours * 3600 * constraints.stemRatio;
+            
+            console.log(`[MANUAL] Driver ${d.id}: ${d.maxHours}h -> ${budget} pkgs | diameter: ${Math.round(constraints.maxDiameter/60)}min | step: ${Math.round(constraints.stepLimit/60)}min | stem: ${Math.round(maxStemTime/60)}min`);
+            
+            return {
+                id: d.id,
+                maxHours: d.maxHours,
+                timeBudget: d.maxHours * 3600,
+                packageBudget: budget,
+                maxStemTime: maxStemTime,
+                maxDiameter: constraints.maxDiameter,
+                stepLimit: constraints.stepLimit,
+                currentPackages: 0,
+                currentDriveTime: 0,
+                currentServiceTime: 0,
+                route: [],
+                assignedIndices: new Set(),
+                isFull: false
+            };
+        });
+        
+        // Sort by hours (longest first - they get seeded farther, 2h stays close)
+        drivers.sort((a, b) => b.maxHours - a.maxHours);
+        
+        // Seed each driver in different dense areas
+        const usedSeedAreas = new Set();
+        drivers.forEach(driver => {
+            const seed = findBestSeed(usedSeedAreas, driver.maxStemTime, driver.stepLimit);
+            
+            if (seed) {
+                const stemTime = matrix[0][seed.matrix_index] * TRAFFIC_HIGHWAY;
+                const serviceTime = seed.tbas.length * SECONDS_PER_PKG;
+                
+                seed.isAssigned = true;
+                driver.route.push(seed);
+                driver.assignedIndices.add(seed.matrix_index);
+                driver.currentPackages += seed.tbas.length;
+                driver.currentDriveTime += stemTime;
+                driver.currentServiceTime += serviceTime;
+                
+                // Mark this area as used (exclude nearby stops from other seeds)
+                unassigned.forEach(u => {
+                    if (!u.isAssigned && matrix[seed.matrix_index][u.matrix_index] < driver.maxDiameter) {
+                        usedSeedAreas.add(u.matrix_index);
+                    }
+                });
+                
+                console.log(`[MANUAL] Driver ${driver.id} seeded: "${seed.address}" (${seed.tbas.length} pkgs) @ ${Math.round(stemTime/60)}min`);
+            }
+        });
+        
+        // Parallel growth: each driver grows their cluster using their own constraints
+        let iterations = 0;
+        const maxIterations = totalPackages * 3;
+        
+        while (iterations < maxIterations) {
+            iterations++;
+            
+            const remaining = unassigned.filter(u => !u.isAssigned);
+            if (remaining.length === 0) break;
+            
+            let madeAssignment = false;
+            
+            // Each active driver tries to grab their best nearby package
+            drivers.filter(d => !d.isFull && d.route.length > 0).forEach(driver => {
+                if (driver.currentPackages >= driver.packageBudget) {
+                    driver.isFull = true;
+                    return;
+                }
+                
+                const lastStop = driver.route[driver.route.length - 1];
+                
+                let bestCandidate = null;
+                let bestScore = Infinity;
+                
+                remaining.filter(u => !u.isAssigned).forEach(pkg => {
+                    const addPkgs = pkg.tbas.length;
+                    
+                    // Budget check (soft cap for manual)
+                    if (driver.currentPackages + addPkgs > VAN_CAPACITY) return;
+                    
+                    const distFromLast = matrix[lastStop.matrix_index][pkg.matrix_index];
+                    if (distFromLast >= UNREACHABLE) return;
+                    
+                    // Use driver's own step limit (hour-based)
+                    if (distFromLast > driver.stepLimit) return;
+                    
+                    // Diameter check using driver's own limit (hour-based)
+                    let violatesDiameter = false;
+                    for (const idx of driver.assignedIndices) {
+                        if (matrix[idx][pkg.matrix_index] > driver.maxDiameter) {
+                            violatesDiameter = true;
+                            break;
+                        }
+                    }
+                    if (violatesDiameter) return;
+                    
+                    // Time check
+                    const addedDrive = distFromLast * TRAFFIC_CITY;
+                    const addedService = addPkgs * SECONDS_PER_PKG;
+                    const newTime = driver.currentDriveTime + driver.currentServiceTime + addedDrive + addedService;
+                    if (newTime > driver.timeBudget) return;
+                    
+                    // Scoring
+                    let score = distFromLast;
+                    
+                    // Same area bonus
+                    if (pkg.address === lastStop.address) {
+                        score *= (1 - SAME_AREA_BONUS);
+                    }
+                    
+                    // Package count bonus
+                    score *= (1 - Math.min(addPkgs * PKG_COUNT_BONUS, 0.5));
+                    
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestCandidate = { pkg, addedDrive, addedService };
+                    }
+                });
+                
+                if (bestCandidate) {
+                    const { pkg, addedDrive, addedService } = bestCandidate;
+                    
+                    pkg.isAssigned = true;
+                    driver.route.push(pkg);
+                    driver.assignedIndices.add(pkg.matrix_index);
+                    driver.currentPackages += pkg.tbas.length;
+                    driver.currentDriveTime += addedDrive;
+                    driver.currentServiceTime += addedService;
+                    madeAssignment = true;
+                }
+            });
+            
+            if (!madeAssignment) {
+                // No driver could take any package - mark all as full
+                drivers.forEach(d => d.isFull = true);
+                break;
+            }
+        }
+        
+        // Finalize routes
+        const finalRoutes = [];
+        
+        drivers.filter(d => d.route.length > 0).forEach(driver => {
+            const routeWithWarehouse = [{ ...startPoint, matrix_index: 0, tbas: ['WAREHOUSE'] }, ...driver.route];
+            const optimized = optimizeRouteWith2Opt([...routeWithWarehouse], matrix);
+            
             let finalDrive = 0;
-            const stemLeg = matrix[optimized[0].matrix_index][optimized[1].matrix_index];
-            finalDrive += (stemLeg * TRAFFIC_HIGHWAY);
-
-            for (let k = 1; k < optimized.length - 1; k++) {
-                const legTime = matrix[optimized[k].matrix_index][optimized[k + 1].matrix_index];
-                finalDrive += (legTime * TRAFFIC_CITY);
+            for (let i = 0; i < optimized.length - 1; i++) {
+                const leg = matrix[optimized[i].matrix_index][optimized[i + 1].matrix_index];
+                finalDrive += (i === 0) ? leg * TRAFFIC_HIGHWAY : leg * TRAFFIC_CITY;
             }
-
-            let finalService = 0;
-            for (let k = 1; k < optimized.length; k++) {
-                finalService += calculateServiceTime(optimized[k].tbas.length);
-            }
-
+            const finalService = driver.currentPackages * SECONDS_PER_PKG;
+            const totalHours = (finalDrive + finalService) / 3600;
+            
+            console.log(`[MANUAL] Driver ${driver.id}: ${driver.route.length} stops, ${driver.currentPackages} pkgs, ${totalHours.toFixed(2)}h/${driver.maxHours}h`);
+            
             finalRoutes.push({
                 route: optimized,
-                totalHours: (finalDrive + finalService) / 3600,
+                totalHours: totalHours,
                 driverId: driver.id,
                 driverMax: driver.maxHours
             });
-        }
-    });
-
-    // 4. ORPHAN RESCUE 
-    const remaining = unassigned.filter(u => !u.isAssigned);
-    if (remaining.length > 0 && finalRoutes.length > 0) {
-        remaining.forEach(orphan => {
-            let bestRoute = null;
-            let minAddedTime = Infinity;
-
-            finalRoutes.forEach(fr => {
-                let currentTotal = 0;
-                fr.route.forEach(r => currentTotal += (r.tbas ? r.tbas.length : 0));
-
-                if (currentTotal + orphan.tbas.length > VAN_CAPACITY) return;
-
-                const lastStop = fr.route[fr.route.length - 1];
-                const dist = matrix[lastStop.matrix_index][orphan.matrix_index];
-
-                if (dist > 1800) return;
-
-                if (dist < minAddedTime) {
-                    minAddedTime = dist;
-                    bestRoute = fr;
-                }
+        });
+        
+        // Overflow
+        const overflow = unassigned.filter(u => !u.isAssigned);
+        if (overflow.length > 0) {
+            console.log(`[MANUAL] OVERFLOW: ${overflow.length} packages (need more drivers or looser constraints)`);
+            finalRoutes.push({
+                route: overflow,
+                totalHours: 0,
+                driverId: "OVERFLOW",
+                driverMax: 0
             });
-
-            if (bestRoute) {
-                bestRoute.route.push(orphan);
-                orphan.isAssigned = true;
-            }
-        });
+        }
+        
+        return finalRoutes;
     }
-
-    // 5. Overflow
-    const trueOverflow = unassigned.filter(u => !u.isAssigned);
-    if (trueOverflow.length > 0) {
-        finalRoutes.push({
-            route: trueOverflow,
-            totalHours: 0,
-            driverId: "OVERFLOW (Need more drivers!)",
-            driverMax: 0
-        });
-    }
-
-    return finalRoutes;
 };
+
+// =====================================================
+// API ENDPOINT
+// =====================================================
 
 app.post('/calculate-routes', async (req, res) => {
     try {
         const { loosePackages = [], bags = [], drivers, mode } = req.body;
 
-        console.log(`\n--- REQUEST ---`);
-        console.log(`Drivers: ${drivers ? drivers.length : 0} | Mode: "${mode}"`);
+        console.log(`\n========== NEW REQUEST ==========`);
+        console.log(`Mode: "${mode}" | Drivers: ${drivers ? drivers.length : 0}`);
+        
+        if (mode === 'manual' && drivers && drivers.length > 0) {
+            drivers.forEach(d => console.log(`  - Driver ${d.id}: ${d.maxHours}h`));
+        } else if (mode === 'auto' && drivers && drivers.length > 0) {
+            console.log(`  - Auto with ${drivers[0].maxHours}h blocks`);
+        }
 
         if (!drivers) return res.status(400).json({ error: 'No drivers' });
 
@@ -407,7 +634,6 @@ app.post('/calculate-routes', async (req, res) => {
         bags.forEach(b => b.items.forEach(i => bagZips.add(i.postal)));
 
         const allZipsToGeocode = [...new Set([...uniqueLooseZips, ...bagZips])];
-
         const geocoded = await geocodeAddresses(allZipsToGeocode);
         const geoMap = {};
         geocoded.forEach(g => geoMap[g.address] = g);
@@ -450,6 +676,8 @@ app.post('/calculate-routes', async (req, res) => {
             }
         });
 
+        console.log(`Total stops: ${allStops.length} | Packages: ${allStops.reduce((s, x) => s + x.tbas.length, 0)}`);
+
         const buckets = allStops.reduce((acc, s) => {
             (acc[s.state] = acc[s.state] || []).push(s);
             return acc;
@@ -457,15 +685,28 @@ app.post('/calculate-routes', async (req, res) => {
 
         let allRoutes = [];
         for (const state of Object.keys(buckets)) {
+            console.log(`\n--- Processing ${state}: ${buckets[state].length} stops ---`);
             const stops = buckets[state];
             const matrix = await getDistanceMatrix([startingLocation, ...stops]);
             const result = planRoutesForRegion(stops, drivers, matrix, startingLocation, mode);
             allRoutes.push(...result);
         }
 
+        // Re-index driver IDs
+        let driverIdx = 1;
+        allRoutes.forEach(r => {
+            if (!r.driverId.toString().includes("OVERFLOW")) {
+                r.driverId = driverIdx++;
+            }
+        });
+
+        console.log(`\n========== COMPLETE: ${allRoutes.length} routes ==========\n`);
         res.json(allRoutes);
 
-    } catch (error) { console.error(error); res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error(error); 
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

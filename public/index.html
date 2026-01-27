@@ -4,9 +4,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RouteFinder v5 (Dispatcher View)</title>
+    <title>RouteFinder v10 🚀</title>
 
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 
     <style>
         body {
@@ -34,12 +35,8 @@
             border-bottom: 1px solid #3B3B3B;
         }
 
-        h1 {
-            margin: 0;
-            font-size: 2em;
-        }
+        h1 { margin: 0; font-size: 2em; }
 
-        /* Layout */
         .main-layout {
             display: grid;
             grid-template-columns: 350px 1fr;
@@ -55,238 +52,155 @@
 
         .map-area {
             position: relative;
+            display: flex;
+            flex-direction: column;
         }
 
         #map {
-            height: 100%;
+            flex: 1;
             width: 100%;
             background-color: #242f3e;
         }
 
-        /* Controls */
-        .form-group {
-            margin-bottom: 15px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: 500;
-            color: #B3B3B3;
-            font-size: 0.9em;
-        }
-
-        input,
-        select {
-            padding: 10px;
-            border: 1px solid #535353;
-            background-color: #3B3B3B;
-            color: #FFFFFF;
-            border-radius: 6px;
-            width: 100%;
-            box-sizing: border-box;
-        }
-
-        button {
-            padding: 10px;
-            border: none;
-            border-radius: 6px;
-            font-weight: bold;
-            cursor: pointer;
-            width: 100%;
-            margin-top: 5px;
-        }
-
-        .btn-action {
-            background-color: #fca311;
-            color: #121212;
-        }
-
-        .btn-action:hover {
-            background-color: #e89300;
-        }
-
-        .btn-secondary {
-            background-color: #2a9d8f;
-            color: white;
-        }
-
-        .btn-auto {
-            background-color: #7209b7;
-            color: white;
-        }
-
-        .btn-reset {
-            background-color: #444;
-            color: white;
-            margin-bottom: 10px;
-        }
-
-        /* Driver List Items */
-        .driver-item {
+        /* --- DASHBOARD STYLES (NEW) --- */
+        .dashboard-bar {
+            background: #222;
+            border-bottom: 1px solid #444;
+            padding: 10px 15px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px;
-            border-bottom: 1px solid #333;
             font-size: 0.9em;
-            background: #222;
-            margin-bottom: 2px;
-            border-radius: 4px;
+            display: none; /* Hidden until calc */
         }
-
-        /* Better Remove Button */
-        .btn-remove-driver {
-            background-color: #d90429;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            padding: 4px 10px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 1.1em;
-            width: auto;
-            margin: 0;
-            line-height: 1;
-        }
-
-        .btn-remove-driver:hover {
-            background-color: #ef233c;
-        }
-
-        /* Scrollable Driver List */
-        #driverList {
-            max-height: 180px;
-            overflow-y: auto;
-            margin-top: 5px;
-            background: #181818;
-            border: 1px solid #333;
-            border-radius: 4px;
-            scroll-behavior: smooth;
-        }
-
-        /* Accordion Groups */
-        .group-header {
-            background-color: #282828;
-            color: #fff;
-            padding: 10px;
-            cursor: pointer;
-            border: 1px solid #444;
-            border-radius: 6px;
-            margin-top: 10px;
+        .stat-box {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
+            gap: 15px;
         }
-
-        .group-header:hover {
-            background-color: #333;
-        }
-
-        .group-content {
-            display: none;
-            padding-left: 10px;
-            border-left: 2px solid #444;
-            margin-bottom: 10px;
-        }
-
-        .group-content.active {
-            display: block;
-        }
-
-        /* Driver Card in List */
-        .driver-card {
-            background: #222;
-            margin-top: 5px;
-            padding: 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            border: 1px solid #333;
-            transition: transform 0.1s;
-            position: relative;
-        }
-
-        .driver-card:hover {
-            background: #2a2a2a;
-            border-color: #fca311;
-        }
-
-        .driver-card.selected {
-            border-color: #fca311;
-            background: #332b00;
-        }
-
-        /* Copy Hover Effect */
-        .driver-name-header {
-            padding: 4px;
-            border-radius: 4px;
-            transition: background 0.2s;
-            display: inline-block;
-            width: 100%;
-        }
-
-        .driver-name-header:hover {
-            background-color: #444;
-        }
-
-        /* TBA List */
-        .tba-row {
-            font-size: 0.8em;
+        .stat-item {
             color: #aaa;
-            margin-left: 10px;
-            border-left: 1px solid #444;
-            padding-left: 5px;
-            margin-top: 2px;
+        }
+        .stat-item strong {
+            color: #fff;
+            font-size: 1.1em;
         }
 
-        /* Scanner Box */
-        .scanner-overlay {
+        /* Zip Code Dropdown */
+        .zip-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .zip-btn {
+            background: #333;
+            color: #ddd;
+            border: 1px solid #555;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .zip-btn:hover { background: #444; }
+        .zip-content {
+            display: none;
             position: absolute;
-            bottom: 20px;
-            right: 20px;
-            z-index: 1000;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid #fca311;
-            width: 300px;
-            text-align: center;
-            backdrop-filter: blur(5px);
+            right: 0;
+            top: 35px;
+            background: #222;
+            min-width: 280px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            z-index: 2000;
+            border: 1px solid #444;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
         }
-
-        #scanInput {
-            font-size: 1.2em;
-            text-align: center;
-            border-color: #fca311;
+        .zip-content.show { display: block; }
+        .zip-row {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-
-        #scanResult {
-            margin-top: 10px;
-            min-height: 60px;
-        }
-
-        .rec-tag {
-            background-color: #2a9d8f;
-            padding: 2px 5px;
-            border-radius: 3px;
-            font-size: 0.7em;
-            margin-left: 5px;
-        }
-
-        footer {
-            background: #181818;
-            padding: 10px;
-            text-align: center;
+        .zip-row:last-child { border-bottom: none; }
+        .zip-tag {
             font-size: 0.8em;
-            color: #555;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #fff;
+            margin-left: 5px;
+            font-weight: bold;
         }
+
+        /* Controls */
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 500; color: #B3B3B3; font-size: 0.9em; }
+        input, select { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; }
+        textarea { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85em; resize: vertical; }
+        textarea:focus { outline: none; border-color: #fca311; }
+        button { padding: 10px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
+        .btn-action { background-color: #fca311; color: #121212; }
+        .btn-action:hover { background-color: #e89300; }
+        .btn-secondary { background-color: #2a9d8f; color: white; }
+        .btn-auto { background-color: #7209b7; color: white; }
+        .btn-reset { background-color: #444; color: white; margin-bottom: 10px; }
+        .btn-parse { background-color: #3a86ff; color: white; }
+        .btn-parse:hover { background-color: #2667cc; }
+        .btn-clear { background-color: #555; color: #ccc; font-size: 0.85em; }
+
+        .driver-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #333; font-size: 0.9em; background: #222; margin-bottom: 2px; border-radius: 4px; }
+        .btn-remove-driver { background-color: #d90429; color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-weight: bold; font-size: 1.1em; width: auto; margin: 0; line-height: 1; }
+        .btn-remove-driver:hover { background-color: #ef233c; }
+
+        #driverList { max-height: 180px; overflow-y: auto; margin-top: 5px; background: #181818; border: 1px solid #333; border-radius: 4px; scroll-behavior: smooth; }
+
+        .group-header { background-color: #282828; color: #fff; padding: 10px; cursor: pointer; border: 1px solid #444; border-radius: 6px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .group-header:hover { background-color: #333; }
+        .group-content { display: none; padding-left: 10px; border-left: 2px solid #444; margin-bottom: 10px; }
+        .group-content.active { display: block; }
+
+        .driver-card { background: #222; margin-top: 5px; padding: 10px; border-radius: 4px; cursor: pointer; border: 1px solid #333; transition: transform 0.1s; position: relative; }
+        .driver-card:hover { background: #2a2a2a; border-color: #fca311; }
+        .driver-card.selected { border-color: #fca311; background: #332b00; }
+        .driver-name-header { padding: 4px; border-radius: 4px; transition: background 0.2s; display: inline-block; width: 100%; }
+        .driver-name-header:hover { background-color: #444; }
+
+        .tba-row { font-size: 0.8em; color: #aaa; margin-left: 10px; border-left: 1px solid #444; padding-left: 5px; margin-top: 2px; }
+
+        .scanner-overlay { position: absolute; bottom: 20px; right: 20px; z-index: 1000; background: rgba(0, 0, 0, 0.85); padding: 20px; border-radius: 12px; border: 1px solid #fca311; width: 300px; text-align: center; backdrop-filter: blur(5px); }
+        #scanInput { font-size: 1.2em; text-align: center; border-color: #fca311; }
+        #scanResult { margin-top: 10px; min-height: 60px; }
+
+        footer { background: #181818; padding: 10px; text-align: center; font-size: 0.8em; color: #555; }
+
+        /* === MAPLIBRE MARKERS STYLING === */
+        .driver-marker { display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-shadow: 0 0 2px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.1s; }
+        .driver-marker:hover { transform: scale(1.1); z-index: 999; }
+        .bag-marker { border-width: 3px; font-size: 10px; z-index: 50; }
+
+        .maplibregl-popup-content { background: #222 !important; color: #eee !important; border: 1px solid #555; border-radius: 6px; padding: 10px; font-family: sans-serif; font-size: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.8); }
+        .maplibregl-popup-tip { border-top-color: #222 !important; border-bottom-color: #222 !important; }
+        .maplibregl-popup-close-button { color: #aaa; }
+
+        .input-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+        .input-tab { flex: 1; padding: 8px; background: #333; border: 1px solid #444; border-radius: 6px 6px 0 0; cursor: pointer; text-align: center; font-size: 0.85em; transition: all 0.2s; }
+        .input-tab:hover { background: #444; }
+        .input-tab.active { background: #3B3B3B; border-bottom-color: #3B3B3B; color: #fca311; }
+        .input-panel { display: none; background: #3B3B3B; padding: 10px; border-radius: 0 0 6px 6px; border: 1px solid #444; border-top: none; }
+        .input-panel.active { display: block; }
+
+        .parse-status { font-size: 0.8em; padding: 8px; border-radius: 4px; margin-top: 8px; }
+        .parse-status.success { background: rgba(42, 157, 143, 0.2); border: 1px solid #2a9d8f; color: #2a9d8f; }
+        .parse-status.error { background: rgba(217, 4, 41, 0.2); border: 1px solid #d90429; color: #d90429; }
+        .help-text { font-size: 0.75em; color: #777; margin-top: 5px; line-height: 1.4; }
+        .help-text code { background: #222; padding: 1px 4px; border-radius: 3px; color: #aaa; }
     </style>
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>RouteFinder v5</h1>
+            <h1>RouteFinder v10 🚀</h1>
         </header>
 
         <div class="main-layout">
@@ -294,12 +208,36 @@
                 <div id="controls">
                     <div class="form-group">
                         <label>1. Packages</label>
-                        <input type="file" id="csvFile" accept=".csv" multiple>
-                        <div id="fileInfo" style="font-size:0.8em; color:#aaa; margin-top:2px;"></div>
+                        
+                        <div class="input-tabs">
+                            <div class="input-tab active" data-tab="text">📝 Text Input</div>
+                            <div class="input-tab" data-tab="file">📁 File Upload</div>
+                        </div>
 
-                        <label style="margin-top:5px; font-size:0.8em; color:#9b5de5;">+ Upload Bags (Optional)</label>
-                        <input type="file" id="bagFile" accept=".csv" multiple>
-                        <div id="bagList" style="margin-top:5px; font-size:0.8em; color:#ccc;"></div>
+                        <div class="input-panel active" id="textPanel">
+                            <textarea id="textInput" rows="8" placeholder="Paste packages here...
+Format Examples:
+TBA123456789,19010
+TBA987654321,19020"></textarea>
+                            <div class="help-text">
+                                <strong>Loose:</strong> <code>TBA,ZIP</code> one per line<br>
+                                <strong>Bag:</strong> Name on its own line, then TBAs below it<br>
+                                <strong>End bag:</strong> Double blank line or new bag name
+                            </div>
+                            <div style="display: flex; gap: 5px; margin-top: 8px;">
+                                <button id="parseText" class="btn-parse">Parse Input</button>
+                                <button id="clearText" class="btn-clear" style="width: 80px;">Clear</button>
+                            </div>
+                            <div id="parseStatus"></div>
+                        </div>
+
+                        <div class="input-panel" id="filePanel">
+                            <input type="file" id="csvFile" accept=".csv" multiple>
+                            <div id="fileInfo" style="font-size:0.8em; color:#aaa; margin-top:5px;"></div>
+                            <label style="margin-top:10px; font-size:0.8em; color:#9b5de5;">+ Upload Bags (Optional)</label>
+                            <input type="file" id="bagFile" accept=".csv" multiple>
+                            <div id="bagList" style="margin-top:5px; font-size:0.8em; color:#ccc;"></div>
+                        </div>
                     </div>
 
                     <div class="form-group">
@@ -317,8 +255,7 @@
                         <button id="findRoutes" class="btn-action">Calculate</button>
                     </div>
 
-                    <details open
-                        style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
+                    <details open style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
                         <summary style="cursor:pointer; font-size:0.9em; color:#aaa;">Manual Driver Add</summary>
                         <div style="display:flex; gap:5px; margin-top:5px;">
                             <select id="blockTime">
@@ -340,11 +277,9 @@
                 <div id="resultsArea" style="display:none;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
                         <h3 style="margin:0;">Routes</h3>
-                        <button class="btn-reset" onclick="resetMapFilter()"
-                            style="width:auto; padding:5px 10px; font-size:0.8em;">Show All Map</button>
+                        <button class="btn-reset" onclick="resetMapFilter()" style="width:auto; padding:5px 10px; font-size:0.8em;">Show All Map</button>
                     </div>
-                    <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy •
-                        Click Card to Filter</div>
+                    <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy • Click Card to Filter</div>
                     <div id="routeList"></div>
                     <div style="margin-top:20px;">
                         <button id="exportScannerCsv" class="btn-secondary">Export Lookup CSV</button>
@@ -353,6 +288,18 @@
             </div>
 
             <div class="map-area">
+                <div id="dashboard" class="dashboard-bar">
+                    <div class="stat-box">
+                        <div class="stat-item"><strong id="statRoutes">0</strong> Routes</div>
+                        <div class="stat-item"><strong id="statPkgs">0</strong> Packages</div>
+                        <div class="stat-item"><strong id="statStops">0</strong> Locations</div>
+                    </div>
+                    <div class="zip-dropdown">
+                        <button class="zip-btn" onclick="toggleZipMenu()">📍 Zip Code Breakdown ▼</button>
+                        <div id="zipMenu" class="zip-content"></div>
+                    </div>
+                </div>
+
                 <div id="map"></div>
 
                 <div id="scanPanel" class="scanner-overlay" style="display:none;">
@@ -371,29 +318,122 @@
         </footer>
     </div>
 
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
     <script>
         // STATE
         let map;
-        let mapLayers = []; // Stores { layer: L.Layer, driverId: X, hours: Y }
+        let mapLayers = []; 
         let loosePackages = [];
         let bagFiles = [];
         let drivers = [];
         let allCalculatedRoutes = [];
         let tbaLookup = {};
 
+        // UNIQUE COLOR PALETTE
+        const DRIVER_COLORS = [
+            '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
+            '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe',
+            '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000',
+            '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080',
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
+            '#dfe6e9', '#fd79a8', '#00b894', '#e17055', '#0984e3'
+        ];
+
         // INIT MAP
         function initMap() {
-            if (map) map.remove();
-            map = L.map('map').setView([40.101, -75.305], 9);
-            L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; Stadia Maps'
-            }).addTo(map);
+            map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                center: [-75.305, 40.101],
+                zoom: 9,
+                pitch: 40,
+                bearing: 0,
+                antialias: true
+            });
+            map.addControl(new maplibregl.NavigationControl());
         }
         window.onload = initMap;
 
-        // CSV PARSING
+        // TABS
+        document.querySelectorAll('.input-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.input-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.input-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab + 'Panel').classList.add('active');
+            });
+        });
+
+        // PARSERS
+        function parseTextInput(text) {
+            const lines = text.split('\n');
+            const parsed = { loosePackages: [], bags: [] };
+            let currentBag = null;
+            let emptyLineCount = 0;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line === '') {
+                    emptyLineCount++;
+                    if (emptyLineCount >= 2 && currentBag) {
+                        if (currentBag.items.length > 0) parsed.bags.push(currentBag);
+                        currentBag = null;
+                    }
+                    continue;
+                }
+                emptyLineCount = 0;
+                const isTbaLine = line.includes(',') && /TBA\d+/i.test(line);
+
+                if (isTbaLine) {
+                    const parts = line.split(',');
+                    if (parts.length >= 2) {
+                        const tba = parts[0].trim().toUpperCase();
+                        const postal = parts[1].trim();
+                        if (tba && postal) {
+                            if (currentBag) currentBag.items.push({ tba, postal });
+                            else parsed.loosePackages.push({ tba, postal });
+                        }
+                    }
+                } else {
+                    if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+                    currentBag = { name: line, items: [] };
+                }
+            }
+            if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+            return parsed;
+        }
+
+        document.getElementById('parseText').addEventListener('click', () => {
+            const text = document.getElementById('textInput').value;
+            const statusEl = document.getElementById('parseStatus');
+            if (!text.trim()) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No input to parse';
+                return;
+            }
+            const parsed = parseTextInput(text);
+            loosePackages = parsed.loosePackages;
+            bagFiles = parsed.bags;
+            const total = parsed.loosePackages.length + parsed.bags.reduce((s, b) => s + b.items.length, 0);
+            if (total === 0) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No valid packages found.';
+            } else {
+                statusEl.className = 'parse-status success';
+                statusEl.textContent = `✓ Loaded ${total} packages`;
+                document.getElementById('fileInfo').textContent = `${total} pkgs from text`;
+                renderBagList();
+            }
+        });
+
+        document.getElementById('clearText').addEventListener('click', () => {
+            document.getElementById('textInput').value = '';
+            document.getElementById('parseStatus').innerHTML = '';
+            loosePackages = [];
+            bagFiles = [];
+            document.getElementById('fileInfo').textContent = '';
+            renderBagList();
+        });
+
         function parseCSV(csvText) {
             const lines = csvText.split('\n');
             if (lines.length < 1) return null;
@@ -410,7 +450,6 @@
             return pkgs;
         }
 
-        // HANDLERS
         document.getElementById('csvFile').addEventListener('change', (e) => {
             const f = e.target.files[0];
             if (!f) return;
@@ -422,11 +461,9 @@
             r.readAsText(f);
         });
 
-        // --- BAG FILE HANDLER ---
         document.getElementById('bagFile').addEventListener('change', (e) => {
             const files = e.target.files;
             if (!files || files.length === 0) return;
-
             Array.from(files).forEach(file => {
                 const reader = new FileReader();
                 reader.onload = (evt) => {
@@ -454,52 +491,28 @@
         }
         window.removeBag = (i) => { bagFiles.splice(i, 1); renderBagList(); };
 
-        // --- UPDATED DRIVER LOGIC (Manual & Shortcuts) ---
-
         function addManualDriver() {
             const blockSelect = document.getElementById('blockTime');
             const h = parseFloat(blockSelect.value);
-
-            drivers.push({
-                id: drivers.length + 1,
-                maxHours: h,
-                maxPackages: 45
-            });
-
+            drivers.push({ id: drivers.length + 1, maxHours: h, maxPackages: 45 });
             renderDriverList();
-
-            // Auto-scroll to bottom
             const container = document.getElementById('driverList');
-            setTimeout(() => {
-                container.scrollTop = container.scrollHeight;
-            }, 0);
+            setTimeout(() => container.scrollTop = container.scrollHeight, 0);
         }
 
-        // Global function for removal (accessed by onclick)
         window.removeDriver = (index = -1) => {
             if (drivers.length === 0) return;
-
-            if (index > -1) {
-                // Remove specific
-                drivers.splice(index, 1);
-            } else {
-                // Remove last (for shortcut)
-                drivers.pop();
-            }
+            if (index > -1) drivers.splice(index, 1);
+            else drivers.pop();
             reindexDrivers();
             renderDriverList();
         };
 
-        function reindexDrivers() {
-            drivers.forEach((d, i) => {
-                d.id = i + 1;
-            });
-        }
+        function reindexDrivers() { drivers.forEach((d, i) => { d.id = i + 1; }); }
 
         function renderDriverList() {
             const l = document.getElementById('driverList');
             l.innerHTML = '';
-
             drivers.forEach((d, i) => {
                 const div = document.createElement('div');
                 div.className = 'driver-item';
@@ -512,8 +525,6 @@
                 `;
                 l.appendChild(div);
             });
-
-            // Visual feedback on the Calculate button
             const calcBtn = document.getElementById('findRoutes');
             if (drivers.length > 0) {
                 calcBtn.textContent = `Calculate (${drivers.length} Drivers)`;
@@ -524,70 +535,39 @@
         }
 
         document.getElementById('addDriver').addEventListener('click', addManualDriver);
-
-        // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
             const activeTag = document.activeElement.tagName.toLowerCase();
             if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
-
-            // Equal Sign (=) or Numpad Plus (+) to ADD
-            if (e.key === '=' || e.key === '+') {
-                e.preventDefault();
-                addManualDriver();
-            }
-
-            // Minus Sign (-) or Numpad Subtract (-) to REMOVE LAST
-            if (e.key === '-' || e.key === '_') {
-                e.preventDefault();
-                removeDriver(); // Removes last entry
-            }
+            if (e.key === '=' || e.key === '+') { e.preventDefault(); addManualDriver(); }
+            if (e.key === '-' || e.key === '_') { e.preventDefault(); removeDriver(); }
         });
 
-        // --- END DRIVER LOGIC ---
-
-        // --- BACKEND CONNECTION (UPDATED FOR STRING MODE) ---
-
-        // AUTO PLAN BUTTON
         document.getElementById('autoPlan').addEventListener('click', () => {
-            if (loosePackages.length === 0 && bagFiles.length === 0) return alert("Upload CSV first");
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert("Upload CSV or parse text input first");
             const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
             document.getElementById('autoPlan').textContent = 'Thinking...';
-
             let vFleet = [];
             for (let i = 0; i < 200; i++) vFleet.push({ id: i + 1, maxHours: maxH, maxPackages: 48 });
-
-            // CHANGED: Explicitly pass 'auto'
             runBackend(vFleet, 'auto', maxH);
         });
 
-        // CALCULATE BUTTON
         document.getElementById('findRoutes').addEventListener('click', () => {
             if (drivers.length === 0) return alert("Add drivers or use Auto-Plan");
             document.getElementById('findRoutes').textContent = 'Calculating...';
-            // CHANGED: Explicitly pass 'manual'
             runBackend(drivers, 'manual', 0);
         });
 
-        // CHANGED: Function now accepts 'mode' string directly
         function runBackend(driverSet, mode, baseMax) {
             fetch('/calculate-routes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    loosePackages,
-                    bags: bagFiles,
-                    drivers: driverSet,
-                    mode: mode // Sends 'manual' or 'auto'
-                })
+                body: JSON.stringify({ loosePackages, bags: bagFiles, drivers: driverSet, mode: mode })
             })
                 .then(res => res.json())
                 .then(routes => {
                     const active = routes.filter(r => r.route.length > 0);
                     allCalculatedRoutes = active;
-
-                    // CHECK: Logic now checks string equality
                     if (mode === 'auto') {
-                        // Smart Resize Logic
                         const blocks = [2, 2.5, 3, 3.5, 4];
                         drivers = [];
                         active.forEach((r, i) => {
@@ -595,106 +575,150 @@
                                 drivers.push({ id: "OVERFLOW", maxHours: 0, maxPackages: 0 });
                                 return;
                             }
-                            const needed = r.totalHours; // Safe buffer
+                            const needed = r.totalHours;
                             let rec = baseMax;
                             for (let b of blocks) if (b >= needed) { rec = b; break; }
                             if (rec > baseMax) rec = baseMax;
-
-                            r.driverMax = rec; // Update result for display
-                            r.driverId = i + 1; // Re-index
+                            r.driverMax = rec;
+                            r.driverId = i + 1;
                             drivers.push({ id: i + 1, maxHours: baseMax, maxPackages: 48, recommendedHours: rec });
                         });
                         renderDriverList();
-                        alert(`Plan: ${active.length} Routes Generated.`);
+                        // REMOVED ALERT: alert(`Plan: ${active.length} Routes Generated.`);
                     }
-
                     document.getElementById('autoPlan').textContent = 'Auto-Plan';
-                    // Reset button text
                     const dLen = drivers.length;
                     document.getElementById('findRoutes').textContent = dLen > 0 ? `Calculate (${dLen} Drivers)` : 'Calculate';
-
                     document.getElementById('resultsArea').style.display = 'block';
                     document.getElementById('scanPanel').style.display = 'block';
+                    document.getElementById('dashboard').style.display = 'flex'; // Show Dashboard
                     document.getElementById('scanInput').focus();
-
+                    
                     renderGroupedView(active);
                     buildMap(active);
                     buildLookup(active);
+                    updateDashboard(active);
                 })
                 .catch(e => alert(e.message));
         }
 
-        // --- GROUPED VIEW WITH CLICK-TO-COPY ---
+        // --- DASHBOARD LOGIC ---
+        function updateDashboard(routes) {
+            const totalRoutes = routes.length;
+            let totalPkgs = 0;
+            let totalStops = 0;
+            let zipMap = {};
+
+            routes.forEach(r => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const dName = isOverflow ? "Overflow" : `D${r.driverId}`;
+
+                r.route.forEach((stop, i) => {
+                    if (i > 0) {
+                        const count = stop.tbas ? stop.tbas.length : 0;
+                        totalPkgs += count;
+                        totalStops++;
+
+                        // Extract Zip from Address (simple regex for US zip)
+                        const zipMatch = stop.address.match(/\b\d{5}\b/);
+                        if (zipMatch) {
+                            const zip = zipMatch[0];
+                            if (!zipMap[zip]) zipMap[zip] = new Set();
+                            zipMap[zip].add({ name: dName, color: color });
+                        }
+                    }
+                });
+            });
+
+            document.getElementById('statRoutes').innerText = totalRoutes;
+            document.getElementById('statPkgs').innerText = totalPkgs;
+            document.getElementById('statStops').innerText = totalStops;
+
+            // Build Zip Menu
+            const menu = document.getElementById('zipMenu');
+            menu.innerHTML = '';
+            Object.keys(zipMap).sort().forEach(zip => {
+                const drivers = Array.from(zipMap[zip]);
+                let tags = '';
+                drivers.forEach(d => {
+                    tags += `<span class="zip-tag" style="background:${d.color}">${d.name}</span>`;
+                });
+                
+                const row = document.createElement('div');
+                row.className = 'zip-row';
+                row.innerHTML = `<span style="color:#aaa">${zip}</span> <div>${tags}</div>`;
+                menu.appendChild(row);
+            });
+        }
+
+        function toggleZipMenu() {
+            document.getElementById('zipMenu').classList.toggle('show');
+        }
+
+        // Close dropdown if clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.zip-btn')) {
+                const dropdowns = document.getElementsByClassName("zip-content");
+                for (let i = 0; i < dropdowns.length; i++) {
+                    if (dropdowns[i].classList.contains('show')) {
+                        dropdowns[i].classList.remove('show');
+                    }
+                }
+            }
+        }
+
         function renderGroupedView(routes) {
             const container = document.getElementById('routeList');
             container.innerHTML = '';
-
             const groups = {};
             routes.forEach(r => {
                 let key = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
                 if (!groups[key]) groups[key] = [];
                 groups[key].push(r);
             });
-
             Object.keys(groups).sort().forEach(key => {
                 const groupRoutes = groups[key];
                 const headerText = key === "OVERFLOW" ? "Unassigned" : `${key} Hour Blocks (${groupRoutes.length})`;
                 const color = key === "OVERFLOW" ? "red" : "#2a9d8f";
-
-                // Header
                 const header = document.createElement('div');
                 header.className = 'group-header';
                 header.style.borderColor = color;
                 header.innerHTML = `<span>${headerText}</span> <span style="font-size:0.8em">▼</span>`;
-
-                // Content
                 const content = document.createElement('div');
                 content.className = 'group-content';
-
                 header.onclick = () => { toggleAccordion(content); filterMapByGroup(key); };
-
                 groupRoutes.forEach(r => {
                     const card = document.createElement('div');
                     card.className = 'driver-card';
-
                     let pkgCount = 0;
                     let allTbas = [];
                     r.route.forEach((s, i) => {
-                        if (i > 0) {
-                            pkgCount += s.tbas.length;
-                            allTbas.push(...s.tbas);
-                        }
+                        if (i > 0) { pkgCount += s.tbas.length; allTbas.push(...s.tbas); }
                     });
-
                     const dName = key === "OVERFLOW" ? "Overflow" : `Driver ${r.driverId}`;
-
-                    // Name Element (Click to Copy)
+                    const driverColor = key === "OVERFLOW" ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
                     const nameEl = document.createElement('div');
                     nameEl.className = 'driver-name-header';
                     nameEl.style.fontWeight = 'bold';
-                    nameEl.style.color = key === 'OVERFLOW' ? 'red' : '#fca311';
+                    nameEl.style.color = driverColor;
                     nameEl.style.cursor = 'copy';
                     nameEl.title = 'Click Name to Copy TBAs';
-                    nameEl.innerHTML = `${dName} <span style="font-size:0.8em; color:#888;">📋</span>`;
-
+                    nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} <span style="font-size:0.8em; color:#888;">📋</span>`;
                     nameEl.onclick = (e) => {
-                        e.stopPropagation(); // Stop card click
+                        e.stopPropagation();
                         const textToCopy = allTbas.join('\r\n');
                         navigator.clipboard.writeText(textToCopy).then(() => {
                             const originalHTML = nameEl.innerHTML;
-                            nameEl.innerHTML = `${dName} ✅`;
+                            nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} ✅`;
                             setTimeout(() => nameEl.innerHTML = originalHTML, 1000);
                         });
                     };
-
-                    // Info Element
                     const infoEl = document.createElement('div');
                     infoEl.style.fontSize = '0.85em';
                     infoEl.style.color = '#ccc';
                     infoEl.style.marginTop = '2px';
                     infoEl.innerText = `${pkgCount} Pkgs • ${formatHours(r.totalHours)} Est`;
-
-                    // List Element
                     const listEl = document.createElement('div');
                     listEl.style.marginTop = '5px';
                     listEl.style.paddingTop = '5px';
@@ -702,21 +726,16 @@
                     let listHtml = '';
                     allTbas.forEach(t => listHtml += `<div class="tba-row">${t}</div>`);
                     listEl.innerHTML = listHtml;
-
                     card.appendChild(nameEl);
                     card.appendChild(infoEl);
                     card.appendChild(listEl);
-
-                    // Map Filter Logic (Click card background)
                     card.onclick = () => {
                         filterMapByDriver(r.driverId);
                         document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
                         card.classList.add('selected');
                     };
-
                     content.appendChild(card);
                 });
-
                 container.appendChild(header);
                 container.appendChild(content);
             });
@@ -726,95 +745,162 @@
             el.style.display = el.style.display === 'block' ? 'none' : 'block';
         }
 
-        // --- MAP FUNCTIONS ---
-        function buildMap(routes) {
-            mapLayers.forEach(o => map.removeLayer(o.layer));
-            mapLayers = [];
-            const colors = ['#d90429', '#0077b6', '#52b69a', '#fca311', '#8338ec', '#fb5607'];
-
-            let allPoints = [];
-
-            routes.forEach((r, idx) => {
-                const color = r.driverId.toString().includes("OVERFLOW") ? "#666" : colors[idx % colors.length];
-                const groupKey = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
-
-                r.route.forEach((stop, i) => {
-                    if (i === 0 && !r.driverId.toString().includes("OVERFLOW")) return;
-
-                    // CHECK IF BAG
-                    const isBag = stop.isBag; // This comes from backend
-                    const markerColor = isBag ? '#f1faee' : color;
-                    const markerRadius = isBag ? 10 : 8;
-                    const strokeColor = isBag ? color : 'white';
-
-                    const m = L.circleMarker([stop.coordinates.lat, stop.coordinates.lng], {
-                        radius: markerRadius,
-                        fillColor: markerColor,
-                        color: strokeColor,
-                        weight: isBag ? 3 : 1,
-                        fillOpacity: 0.9
-                    }).bindPopup(stop.address);
-
-                    m.addTo(map);
-                    mapLayers.push({ layer: m, driverId: r.driverId, groupKey: groupKey });
-                    allPoints.push([stop.coordinates.lat, stop.coordinates.lng]);
-                });
-            });
-            if (allPoints.length) map.fitBounds(allPoints);
+        function createNumberedMarker(lat, lng, number, color, isBag = false) {
+            const el = document.createElement('div');
+            el.className = isBag ? 'driver-marker bag-marker' : 'driver-marker';
+            const size = isBag ? 32 : 26;
+            el.style.width = `${size}px`;
+            el.style.height = `${size}px`;
+            el.style.backgroundColor = isBag ? '#f1faee' : color;
+            el.style.color = isBag ? color : 'white';
+            el.style.borderColor = isBag ? color : 'white';
+            el.style.fontSize = isBag ? '11px' : '12px';
+            el.innerText = number;
+            const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]);
+            return marker;
         }
 
+        function buildMap(routes) {
+            mapLayers.forEach(obj => obj.marker.remove());
+            mapLayers = [];
+            if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+            if (map.getSource('route-lines')) map.removeSource('route-lines');
+
+            let allPoints = [];
+            let geoJsonFeatures = [];
+
+            routes.forEach((r) => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const driverNum = isOverflow ? "?" : r.driverId;
+                const groupKey = isOverflow ? "OVERFLOW" : r.driverMax.toString();
+
+                let lineCoordinates = r.route.map(s => [s.coordinates.lng, s.coordinates.lat]);
+                geoJsonFeatures.push({
+                    'type': 'Feature',
+                    'properties': { 'color': color, 'driverId': r.driverId, 'groupKey': groupKey },
+                    'geometry': { 'type': 'LineString', 'coordinates': lineCoordinates }
+                });
+
+                r.route.forEach((stop, i) => {
+                    if (i === 0 && !isOverflow) return; 
+                    const isBag = stop.isBag;
+                    const displayNum = isBag ? `B${driverNum}` : driverNum;
+                    const marker = createNumberedMarker(stop.coordinates.lat, stop.coordinates.lng, displayNum, color, isBag);
+
+                    const popup = new maplibregl.Popup({ offset: 25, closeButton: false }).setHTML(`
+                        <strong style="color:${color}">Driver ${driverNum}</strong><br>
+                        ${stop.address}<br>
+                        <span style="color:#aaa">${stop.tbas ? stop.tbas.length : 0} packages</span>
+                        ${isBag ? '<br><em style="color:#9b5de5">📦 Bag</em>' : ''}
+                    `);
+                    
+                    marker.setPopup(popup);
+                    marker.addTo(map);
+                    mapLayers.push({ marker: marker, driverId: r.driverId, groupKey: groupKey });
+                    allPoints.push([stop.coordinates.lng, stop.coordinates.lat]);
+                });
+            });
+
+            // GHOST MODE LINES
+            map.addSource('route-lines', {
+                'type': 'geojson',
+                'data': { 'type': 'FeatureCollection', 'features': geoJsonFeatures }
+            });
+
+            map.addLayer({
+                'id': 'route-lines',
+                'type': 'line',
+                'source': 'route-lines',
+                'layout': { 'line-join': 'round', 'line-cap': 'round' },
+                'paint': {
+                    'line-color': ['get', 'color'],
+                    'line-width': 3,
+                    'line-opacity': 0.4  // Increased to 0.4 for better visibility (was 0.15)
+                }
+            });
+
+            if (allPoints.length) {
+                const bounds = new maplibregl.LngLatBounds();
+                allPoints.forEach(p => bounds.extend(p));
+                map.fitBounds(bounds, { padding: 80 });
+            }
+        }
+
+        // --- FILTERS (FOCUS MODE) ---
         function filterMapByGroup(groupKey) {
             mapLayers.forEach(obj => {
-                if (obj.groupKey === groupKey) obj.layer.addTo(map);
-                else map.removeLayer(obj.layer);
+                const el = obj.marker.getElement();
+                if (obj.groupKey === groupKey) {
+                    el.style.display = '';
+                } else {
+                    el.style.display = 'none';
+                }
             });
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'groupKey', groupKey]);
+                map.setPaintProperty('route-lines', 'line-opacity', 0.8);
+                map.setPaintProperty('route-lines', 'line-width', 4);
+            }
         }
 
         function filterMapByDriver(dId) {
+            // MARKERS: Hide everyone except selected
             mapLayers.forEach(obj => {
-                if (obj.driverId === dId) obj.layer.addTo(map);
-                else map.removeLayer(obj.layer);
+                const el = obj.marker.getElement();
+                if (obj.driverId === dId) {
+                    el.style.display = '';
+                    el.style.zIndex = '1000'; 
+                } else {
+                    el.style.display = 'none';
+                }
             });
+
+            // LINES: Focus Mode
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'driverId', dId]);
+                map.setPaintProperty('route-lines', 'line-opacity', 1.0); // Neon Bright
+                map.setPaintProperty('route-lines', 'line-width', 6);    // Extra Thick
+            }
         }
 
         window.resetMapFilter = () => {
-            mapLayers.forEach(obj => obj.layer.addTo(map));
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                el.style.display = ''; 
+                el.style.zIndex = ''; 
+            });
             document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', null); 
+                map.setPaintProperty('route-lines', 'line-opacity', 0.4); // Back to Default
+                map.setPaintProperty('route-lines', 'line-width', 3);
+            }
         };
 
-        // --- UTILS ---
         function formatHours(h) { const hr = Math.floor(h); const mn = Math.round((h - hr) * 60); return `${hr}h ${mn}m`; }
 
         function buildLookup(routes) {
             tbaLookup = {};
-            // NOTE: Storing as { d: driverId, s: stopIndex, z: address }
             routes.forEach(r => r.route.forEach((s, i) => {
                 if (i > 0) s.tbas.forEach(t => tbaLookup[t.trim().toUpperCase()] = { d: r.driverId, s: i, z: s.address });
             }));
         }
 
-        // --- FIXED SCANNER LOGIC ---
         document.getElementById('scanInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 const val = e.target.value.trim().toUpperCase();
-                e.target.value = ''; // Reset input immediately
-
+                e.target.value = '';
                 const dDisp = document.getElementById('driverDisplay');
                 const sDisp = document.getElementById('stopDisplay');
-
-                // 1. Try Exact Match
                 let info = tbaLookup[val];
                 let foundTba = val;
-
-                // 2. If not found, try "Ends With" (Last 3, 4, etc.)
                 if (!info) {
                     const allTbas = Object.keys(tbaLookup);
                     const matches = allTbas.filter(tba => tba.endsWith(val));
-
-                    if (matches.length === 1) {
-                        foundTba = matches[0];
-                        info = tbaLookup[foundTba];
-                    } else if (matches.length > 1) {
+                    if (matches.length === 1) { foundTba = matches[0]; info = tbaLookup[foundTba]; }
+                    else if (matches.length > 1) {
                         dDisp.style.color = '#fca311';
                         dDisp.textContent = 'MULTIPLE';
                         sDisp.textContent = `Found ${matches.length} matches ending in "${val}". Scan more digits.`;
@@ -823,8 +909,6 @@
                         return;
                     }
                 }
-
-                // 3. Display Result
                 if (info) {
                     dDisp.style.color = '#2a9d8f';
                     const isOverflow = info.d.toString().includes("OVERFLOW");
@@ -841,7 +925,6 @@
                 }
             }
         });
-
         document.getElementById('scanInput').addEventListener('blur', () => setTimeout(() => document.getElementById('scanInput').focus(), 100));
 
         document.getElementById('exportScannerCsv').addEventListener('click', () => {
@@ -857,5 +940,4 @@
         });
     </script>
 </body>
-
 </html>
