@@ -112,3 +112,6 @@ You only need to do this setup once.
     node server.js
     ```
 4.  Open `http://localhost:3000` in your browser.
+
+
+<img width="1610" height="914" alt="image" src="https://github.com/user-attachments/assets/5912ad08-f1d5-4294-9aab-f3d7eb510b11" />
