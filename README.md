@@ -1,4 +1,4 @@
-![Project Screenshot](Screenshot 2026-03-20 at 3.37.31 AM.png)
+![Project Screenshot](screenshot.png)
 # 🚀 RouteFinder: A Real-World Logistics Optimizer
 
 This isn't just a portfolio project; it's a real-world solution I built to solve a major inefficiency I faced every day at my job as an Amazon Warehouse Associate at DPH9.
