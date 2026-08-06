@@ -1,134 +1,1638 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Route Finder</title>
+    <title>RouteFinder v10 🚀</title>
+
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
     <style>
-        #map {
-            height: 500px;
-            width: 80%;
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            margin: 0;
+            padding: 20px;
+            color: #EFEFEF;
+        }
+
+        .container {
+            max-width: 1400px;
             margin: auto;
+            background: #1E1E1E;
+            border-radius: 12px;
+            border: 1px solid #3B3B3B;
+            overflow: hidden;
         }
-        #controls {
-            width: 80%;
-            margin: 20px auto;
+
+        header {
+            background-color: #282828;
+            color: white;
+            padding: 20px 30px;
             text-align: center;
+            border-bottom: 1px solid #3B3B3B;
         }
-        input[type="text"], input[type="number"] {
-            padding: 10px;
-            margin: 5px;
-            width: 300px;
+
+        h1 { margin: 0; font-size: 2em; }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            height: 800px;
         }
-        .summary-panel {
-            margin: 20px auto;
-            width: 80%;
-            font-size: 16px;
+
+        .sidebar {
+            padding: 20px;
+            border-right: 1px solid #3B3B3B;
+            overflow-y: auto;
+            background: #181818;
         }
+
+        .map-area {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #map {
+            flex: 1;
+            width: 100%;
+            background-color: #242f3e;
+        }
+
+        /* --- DASHBOARD STYLES (NEW) --- */
+        .dashboard-bar {
+            background: #222;
+            border-bottom: 1px solid #444;
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+            display: none; /* Hidden until calc */
+        }
+        .stat-box {
+            display: flex;
+            gap: 15px;
+        }
+        .stat-item {
+            color: #aaa;
+        }
+        .stat-item strong {
+            color: #fff;
+            font-size: 1.1em;
+        }
+
+        /* Zip Code Dropdown */
+        .zip-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .zip-btn {
+            background: #333;
+            color: #ddd;
+            border: 1px solid #555;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .zip-btn:hover { background: #444; }
+        .zip-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 35px;
+            background: #222;
+            min-width: 280px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            z-index: 2000;
+            border: 1px solid #444;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .zip-content.show { display: block; }
+        .zip-row {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .zip-row:last-child { border-bottom: none; }
+        .zip-tag {
+            font-size: 0.8em;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #fff;
+            margin-left: 5px;
+            font-weight: bold;
+        }
+
+        /* Controls */
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 500; color: #B3B3B3; font-size: 0.9em; }
+        input, select { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; }
+        textarea { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85em; resize: vertical; }
+        textarea:focus { outline: none; border-color: #fca311; }
+        button { padding: 10px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
+        .btn-action { background-color: #fca311; color: #121212; }
+        .btn-action:hover { background-color: #e89300; }
+        .btn-secondary { background-color: #2a9d8f; color: white; }
+        .btn-auto { background-color: #7209b7; color: white; }
+        .btn-reset { background-color: #444; color: white; margin-bottom: 10px; }
+        .btn-parse { background-color: #3a86ff; color: white; }
+        .btn-parse:hover { background-color: #2667cc; }
+        .btn-clear { background-color: #555; color: #ccc; font-size: 0.85em; }
+
+        .driver-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #333; font-size: 0.9em; background: #222; margin-bottom: 2px; border-radius: 4px; }
+        .btn-remove-driver { background-color: #d90429; color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-weight: bold; font-size: 1.1em; width: auto; margin: 0; line-height: 1; }
+        .btn-remove-driver:hover { background-color: #ef233c; }
+
+        #driverList { max-height: 180px; overflow-y: auto; margin-top: 5px; background: #181818; border: 1px solid #333; border-radius: 4px; scroll-behavior: smooth; }
+
+        .group-header { background-color: #282828; color: #fff; padding: 10px; cursor: pointer; border: 1px solid #444; border-radius: 6px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .group-header:hover { background-color: #333; }
+        .group-content { display: none; padding-left: 10px; border-left: 2px solid #444; margin-bottom: 10px; }
+        .group-content.active { display: block; }
+
+        .driver-card { background: #222; margin-top: 5px; padding: 10px; border-radius: 4px; cursor: pointer; border: 1px solid #333; transition: transform 0.1s; position: relative; }
+        .driver-card:hover { background: #2a2a2a; border-color: #fca311; }
+        .driver-card.selected { border-color: #fca311; background: #332b00; }
+        .driver-name-header { padding: 4px; border-radius: 4px; transition: background 0.2s; display: inline-block; width: 100%; }
+        .driver-name-header:hover { background-color: #444; }
+
+        .tba-row { font-size: 0.8em; color: #aaa; margin-left: 10px; border-left: 1px solid #444; padding-left: 5px; margin-top: 2px; }
+
+        .scanner-overlay { position: absolute; bottom: 20px; right: 20px; z-index: 1000; background: rgba(0, 0, 0, 0.85); padding: 20px; border-radius: 12px; border: 1px solid #fca311; width: 300px; text-align: center; backdrop-filter: blur(5px); }
+        #scanInput { font-size: 1.2em; text-align: center; border-color: #fca311; }
+        #scanResult { margin-top: 10px; min-height: 60px; }
+
+        footer { background: #181818; padding: 10px; text-align: center; font-size: 0.8em; color: #555; }
+
+        /* === MAPLIBRE MARKERS STYLING === */
+        .driver-marker { display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-shadow: 0 0 2px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.1s; }
+        .driver-marker:hover { transform: scale(1.1); z-index: 999; }
+        .bag-marker { border-width: 3px; font-size: 10px; z-index: 50; }
+
+        .maplibregl-popup-content { background: #222 !important; color: #eee !important; border: 1px solid #555; border-radius: 6px; padding: 10px; font-family: sans-serif; font-size: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.8); }
+        .maplibregl-popup-tip { border-top-color: #222 !important; border-bottom-color: #222 !important; }
+        .maplibregl-popup-close-button { color: #aaa; }
+
+        .input-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+        .input-tab { flex: 1; padding: 8px; background: #333; border: 1px solid #444; border-radius: 6px 6px 0 0; cursor: pointer; text-align: center; font-size: 0.85em; transition: all 0.2s; }
+        .input-tab:hover { background: #444; }
+        .input-tab.active { background: #3B3B3B; border-bottom-color: #3B3B3B; color: #fca311; }
+        .input-panel { display: none; background: #3B3B3B; padding: 10px; border-radius: 0 0 6px 6px; border: 1px solid #444; border-top: none; }
+        .input-panel.active { display: block; }
+
+        .parse-status { font-size: 0.8em; padding: 8px; border-radius: 4px; margin-top: 8px; }
+        .parse-status.success { background: rgba(42, 157, 143, 0.2); border: 1px solid #2a9d8f; color: #2a9d8f; }
+        .parse-status.error { background: rgba(217, 4, 41, 0.2); border: 1px solid #d90429; color: #d90429; }
+        .help-text { font-size: 0.75em; color: #777; margin-top: 5px; line-height: 1.4; }
+        .help-text code { background: #222; padding: 1px 4px; border-radius: 3px; color: #aaa; }
+
+        /* --- Residential switch --- */
+        .switch-row { display: flex; align-items: center; justify-content: space-between; background: #222; border: 1px solid #383838; border-radius: 6px; padding: 9px 12px; margin-top: 10px; }
+        .switch-label { font-size: 0.85em; color: #ccc; }
+        .switch-label small { display: block; color: #777; font-size: 0.85em; margin-top: 2px; }
+        .switch { position: relative; width: 42px; height: 22px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .switch-track { position: absolute; inset: 0; background: #4a4a4a; border-radius: 22px; transition: background .18s; cursor: pointer; }
+        .switch-track::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .18s; }
+        .switch input:checked + .switch-track { background: #2a9d8f; }
+        .switch input:checked + .switch-track::before { transform: translateX(20px); }
+        .switch input:focus-visible + .switch-track { outline: 2px solid #fca311; outline-offset: 2px; }
+
+        /* --- Load summary --- */
+        .load-summary { background: #1b1b1b; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-top: 10px; font-size: 0.8em; }
+        .load-row { display: flex; justify-content: space-between; padding: 2px 0; color: #aaa; }
+        .load-row strong { color: #eee; }
+        .cat-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 8px 0 6px; background: #2a2a2a; }
+        .cat-seg { height: 100%; }
+        .cat-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.9em; }
+        .cat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+        /* --- Exception buttons --- */
+        .exception-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 9px 12px; margin-top: 8px; border-radius: 6px; border: 1px solid; background: transparent; cursor: pointer; font-size: 0.85em; font-weight: 600; }
+        .exception-btn .count { font-size: 1.15em; }
+        .btn-fc { border-color: #f032e6; color: #f032e6; }
+        .btn-fc:hover { background: rgba(240, 50, 230, 0.12); }
+        .btn-hold { border-color: #fca311; color: #fca311; }
+        .btn-hold:hover { background: rgba(252, 163, 17, 0.12); }
+
+        /* --- Exception page overlay --- */
+        .page-overlay { position: fixed; inset: 0; background: #121212; z-index: 5000; display: none; flex-direction: column; }
+        .page-overlay.show { display: flex; }
+        .page-header { padding: 18px 28px; border-bottom: 1px solid #3B3B3B; display: flex; justify-content: space-between; align-items: center; background: #1c1c1c; }
+        .page-header h2 { margin: 0; font-size: 1.35em; }
+        .page-header .sub { color: #999; font-size: 0.8em; margin-top: 4px; font-weight: normal; }
+        .page-body { flex: 1; overflow-y: auto; padding: 20px 28px; }
+        .page-actions { display: flex; gap: 8px; }
+        .page-actions button { width: auto; padding: 8px 16px; }
+        .btn-close-page { background: #444; color: #eee; }
+        .exc-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        .exc-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #444; color: #888; font-weight: 600; text-transform: uppercase; font-size: 0.85em; letter-spacing: .04em; }
+        .exc-table td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; color: #ddd; }
+        .exc-table tr:hover td { background: #1e1e1e; }
+        .exc-table code { color: #fca311; font-family: 'Consolas', monospace; }
+        .banner { padding: 12px 16px; border-radius: 6px; margin-bottom: 18px; font-size: 0.9em; line-height: 1.5; }
+        .banner-fc { background: rgba(240, 50, 230, 0.1); border: 1px solid #f032e6; color: #f9a8f4; }
+        .banner-hold { background: rgba(252, 163, 17, 0.1); border: 1px solid #fca311; color: #ffd88a; }
+        .empty-state { text-align: center; color: #666; padding: 60px 20px; }
+
+        /* --- Vehicle badges --- */
+        .veh-badge { display: inline-block; font-size: 0.72em; font-weight: 700; padding: 2px 7px; border-radius: 3px; letter-spacing: .03em; vertical-align: middle; }
+        .veh-warn { display: block; margin-top: 5px; font-size: 0.78em; color: #ff6b6b; background: rgba(217,4,41,.12); border-left: 2px solid #d90429; padding: 4px 7px; border-radius: 0 3px 3px 0; }
+        .capacity-meter { height: 5px; background: #2a2a2a; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+        .capacity-fill { height: 100%; border-radius: 3px; transition: width .3s; }
     </style>
-    <script src="https://maps.googleapis.com/maps/api/js?key=*******&callback=initMap" async defer></script>
 </head>
-<body>
-    <h1>Route Finder</h1>
-    <h2>Find Custom Routes for Drivers</h2>
-    <div id="controls">
-        <div id="locations">
-            <input type="text" class="location" placeholder="Enter location 1">
-            <input type="text" class="location" placeholder="Enter location 2">
-        </div>
-        <button id="addLocation">Add Location</button>
-        <button id="removeLocation">Remove Location</button>
-        <br>
-        <label for="numDrivers">Number of Drivers:</label>
-        <input type="number" id="numDrivers" min="1" value="3">
-        <button id="findRoutes">Find Routes</button>
-    </div>
-    <div id="map"></div>
-    <div id="routeDetails"></div>
-    <script>
-        let map;
 
-        function initMap() {
-            map = new google.maps.Map(document.getElementById('map'), {
-                center: { lat: 40.10144209586004, lng: -75.30578283911566 },
-                zoom: 10
-            });
+<body>
+    <div class="container">
+        <header>
+            <h1>RouteFinder v10 🚀</h1>
+        </header>
+
+        <div class="main-layout">
+            <div class="sidebar">
+                <div id="controls">
+                    <div class="form-group">
+                        <label>1. Packages</label>
+                        
+                        <div class="input-tabs">
+                            <div class="input-tab active" data-tab="text">📝 Text Input</div>
+                            <div class="input-tab" data-tab="file">📁 File Upload</div>
+                        </div>
+
+                        <div class="input-panel active" id="textPanel">
+                            <textarea id="textInput" rows="8" placeholder="Paste packages here...
+Format Examples:
+TBA123456789,19010
+TBA987654321,19020"></textarea>
+                            <div class="help-text">
+                                <strong>Loose:</strong> <code>TBA,ZIP</code> one per line<br>
+                                <strong>Bag:</strong> Name on its own line, then TBAs below it<br>
+                                <strong>End bag:</strong> Double blank line or new bag name
+                            </div>
+                            <div style="display: flex; gap: 5px; margin-top: 8px;">
+                                <button id="parseText" class="btn-parse">Parse Input</button>
+                                <button id="clearText" class="btn-clear" style="width: 80px;">Clear</button>
+                            </div>
+                            <div id="parseStatus"></div>
+                        </div>
+
+                        <div class="input-panel" id="filePanel">
+                            <input type="file" id="csvFile" accept=".csv" multiple>
+                            <div id="fileInfo" style="font-size:0.8em; color:#aaa; margin-top:5px;"></div>
+                            <label style="margin-top:10px; font-size:0.8em; color:#9b5de5;">+ Upload Bags (Optional)</label>
+                            <input type="file" id="bagFile" accept=".csv" multiple>
+                            <div id="bagList" style="margin-top:5px; font-size:0.8em; color:#ccc;"></div>
+                        </div>
+
+                        <div class="switch-row">
+                            <span class="switch-label">
+                                Residential only
+                                <small>Route houses only. Blank counts as residential.</small>
+                            </span>
+                            <label class="switch">
+                                <input type="checkbox" id="residentialOnly">
+                                <span class="switch-track"></span>
+                            </label>
+                        </div>
+
+                        <div id="loadSummary"></div>
+                        <div id="exceptionButtons"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>2. Fleet</label>
+                        <div style="display:flex; gap:5px;">
+                            <select id="autoMaxBlock">
+                                <option value="2">Max: 2h</option>
+                                <option value="2.5">Max: 2.5h</option>
+                                <option value="3">Max: 3h</option>
+                                <option value="3.5">Max: 3.5h</option>
+                                <option value="4" selected>Max: 4h</option>
+                            </select>
+                            <select id="autoVehicle" title="Largest vehicle available to the fleet">
+                                <option value="SEDAN">Sedans only</option>
+                                <option value="SUV" selected>Up to SUV</option>
+                                <option value="TRUCK">Up to truck</option>
+                            </select>
+                        </div>
+                        <button id="autoPlan" class="btn-auto">Auto-Plan</button>
+                        <button id="findRoutes" class="btn-action">Calculate</button>
+                    </div>
+
+                    <details open style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
+                        <summary style="cursor:pointer; font-size:0.9em; color:#aaa;">Manual Driver Add</summary>
+                        <div style="display:flex; gap:5px; margin-top:5px;">
+                            <select id="blockTime">
+                                <option value="2">2h</option>
+                                <option value="2.5">2.5h</option>
+                                <option value="3">3h</option>
+                                <option value="3.5">3.5h</option>
+                                <option value="4">4h</option>
+                            </select>
+                            <select id="driverVehicle">
+                                <option value="SEDAN">Sedan</option>
+                                <option value="SUV" selected>SUV</option>
+                                <option value="TRUCK">Truck</option>
+                            </select>
+                            <button id="addDriver" class="btn-secondary" style="width:auto; padding:10px 14px;">+ Add</button>
+                        </div>
+                        <div style="font-size: 0.7em; color: #666; margin-top: 3px; text-align: right;">
+                            Shortcuts: (=) Add, (-) Remove
+                        </div>
+                        <div id="driverList"></div>
+                    </details>
+                </div>
+
+                <div id="resultsArea" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <h3 style="margin:0;">Routes</h3>
+                        <button class="btn-reset" onclick="resetMapFilter()" style="width:auto; padding:5px 10px; font-size:0.8em;">Show All Map</button>
+                    </div>
+                    <div style="display:flex; gap:6px; margin-bottom:10px;">
+                        <button id="recalcBtn" class="btn-action" style="font-size:0.85em;">Recalculate</button>
+                        <button class="btn-clear" onclick="clearPlan()" style="width:110px;">Clear plan</button>
+                    </div>
+                    <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy • Click Card to Filter</div>
+                    <div id="routeList"></div>
+                    <div style="margin-top:20px;">
+                        <button id="exportScannerCsv" class="btn-secondary">Export Lookup CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="map-area">
+                <div id="dashboard" class="dashboard-bar">
+                    <div class="stat-box">
+                        <div class="stat-item"><strong id="statRoutes">0</strong> Routes</div>
+                        <div class="stat-item"><strong id="statPkgs">0</strong> Packages</div>
+                        <div class="stat-item"><strong id="statStops">0</strong> Locations</div>
+                        <div class="stat-item"><strong id="statVolume">0</strong> L loaded</div>
+                        <div class="stat-item" id="statVehicleMix"></div>
+                    </div>
+                    <div class="zip-dropdown">
+                        <button class="zip-btn" onclick="toggleZipMenu()">📍 Zip Code Breakdown ▼</button>
+                        <div id="zipMenu" class="zip-content"></div>
+                    </div>
+                </div>
+
+                <div id="map"></div>
+
+                <div id="scanPanel" class="scanner-overlay" style="display:none;">
+                    <div style="font-weight:bold; color:#fca311; margin-bottom:5px;">SCANNER READY</div>
+                    <input type="text" id="scanInput" placeholder="Scan Barcode (Last 4)...">
+                    <div id="scanResult">
+                        <div id="driverDisplay" style="font-size: 40px; font-weight: bold; color: #fff;">--</div>
+                        <div id="stopDisplay" style="font-size: 16px; color: #aaa;">Waiting...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="fcPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#f032e6;">Fulfillment Center Returns</h2>
+                    <div class="sub">Not assigned to any driver &mdash; these ship back to the FC</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-secondary" onclick="exportExceptions('fc')">Export CSV</button>
+                    <button class="btn-close-page" onclick="closePage('fcPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="fcBody"></div></div>
+        </div>
+
+        <div id="holdPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#fca311;">Held: Non-Residential</h2>
+                    <div class="sub">Excluded because <em>Residential only</em> is on</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-secondary" onclick="exportExceptions('hold')">Export CSV</button>
+                    <button class="btn-close-page" onclick="closePage('holdPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="holdBody"></div></div>
+        </div>
+
+        <footer>
+            &copy; 2025 RouteFinder - Developed by Alp Usta - Amazon @ustaseza
+        </footer>
+    </div>
+
+    <script>
+        // STATE
+        let map;
+        let mapLayers = []; 
+        let loosePackages = [];
+        let bagFiles = [];
+        let drivers = [];
+        let allCalculatedRoutes = [];
+        let tbaLookup = {};
+        let allParsedLoose = [];   // pre-screening, so toggling residential re-filters
+        let allParsedBags = [];
+        let fcReturns = [];        // destination is a station/FC code
+        let addressHolds = [];     // non-residential while the switch is on
+        let serverVehicleTiers = null;
+
+        // The warehouse is injected at route[0] by the server. Real routes have
+        // it, overflow routes do not -- so never identify it by position.
+        function isWarehouse(s) {
+            return s.isWarehouse === true ||
+                   (s.tbas && s.tbas.length === 1 && s.tbas[0] === 'WAREHOUSE');
         }
 
-        document.getElementById('addLocation').addEventListener('click', () => {
-            const locationWrapper = document.createElement('div');
-            locationWrapper.classList.add('location-wrapper');
+        // =====================================================
+        // PACKAGE SIZING MODEL (mirrors server.js constants)
+        // =====================================================
+        const PACKING_EFFICIENCY = 0.68;
 
-            const newLocationInput = document.createElement('input');
-            newLocationInput.type = 'text';
-            newLocationInput.classList.add('location');
-            newLocationInput.placeholder = `Enter location ${document.querySelectorAll('.location').length + 1}`;
-
-            locationWrapper.appendChild(newLocationInput);
-            document.getElementById('locations').appendChild(locationWrapper);
+        const VEHICLE_TIERS = [
+            { id: 'SEDAN', label: 'Sedan', zones: { trunk: 425, rearSeat: 280, frontPassenger: 95 }, maxDimCm: 120, color: '#4ecdc4' },
+            { id: 'SUV',   label: 'SUV',   zones: { trunk: 1000, rearSeat: 350, frontPassenger: 95 }, maxDimCm: 180, color: '#fca311' },
+            { id: 'TRUCK', label: 'Truck / Cargo Van', zones: { trunk: 3000, rearSeat: 400, frontPassenger: 95 }, maxDimCm: 250, color: '#f032e6' }
+        ];
+        const TIER_BY_ID = {};
+        VEHICLE_TIERS.forEach(t => {
+            const gross = t.zones.trunk + t.zones.rearSeat + t.zones.frontPassenger;
+            TIER_BY_ID[t.id] = { ...t, usableL: Math.round(gross * PACKING_EFFICIENCY) };
         });
 
-        document.getElementById('removeLocation').addEventListener('click', () => {
-            const locationWrappers = document.querySelectorAll('.location-wrapper');
-            if (locationWrappers.length > 0) {
-                locationWrappers[locationWrappers.length - 1].remove();
-            } else {
-                alert("There are no locations to remove.");
+        // Flat mailers squeeze into gaps -- charged a fraction of their cubic
+        const FLAT_MAX_MIN_DIM_CM = 6;
+        const FLAT_MAX_VOLUME_L = 6;
+        const FLAT_VOLUME_FACTOR = 0.25;
+        const SIZE_SMALL_MAX = 15, SIZE_MEDIUM_MAX = 50, SIZE_LARGE_MAX = 120;
+
+        const CATEGORY_COLORS = {
+            FLAT: '#6c757d', SMALL: '#4ecdc4', MEDIUM: '#3a86ff',
+            LARGE: '#fca311', OVERSIZE: '#d90429', UNKNOWN: '#555'
+        };
+
+        // Strip units and parse a dimension. Handles "22.30 cm", "22.30cm",
+        // "8.78 in", and bare numbers. Returns centimetres.
+        function parseDimension(raw) {
+            if (raw === undefined || raw === null) return NaN;
+            const s = raw.toString().trim().toLowerCase();
+            if (!s) return NaN;
+            const num = parseFloat(s.replace(/[^0-9.\-]/g, ''));
+            if (!isFinite(num)) return NaN;
+            if (s.includes('in') || s.includes('"')) return num * 2.54;
+            if (s.includes('mm')) return num / 10;
+            return num;
+        }
+
+        function computePackageVolume(lengthRaw, widthRaw, heightRaw) {
+            const L = parseDimension(lengthRaw), W = parseDimension(widthRaw), H = parseDimension(heightRaw);
+            if (!isFinite(L) || !isFinite(W) || !isFinite(H) || L <= 0 || W <= 0 || H <= 0) {
+                return { cubicL: 0, effectiveL: 0, maxDimCm: 0, category: 'UNKNOWN' };
             }
+            const cubicL = (L * W * H) / 1000;
+            const maxDimCm = Math.max(L, W, H);
+            const minDimCm = Math.min(L, W, H);
+            const isFlat = minDimCm <= FLAT_MAX_MIN_DIM_CM && cubicL <= FLAT_MAX_VOLUME_L;
+            let category;
+            if (isFlat) category = 'FLAT';
+            else if (cubicL <= SIZE_SMALL_MAX) category = 'SMALL';
+            else if (cubicL <= SIZE_MEDIUM_MAX) category = 'MEDIUM';
+            else if (cubicL <= SIZE_LARGE_MAX) category = 'LARGE';
+            else category = 'OVERSIZE';
+            return {
+                cubicL: +cubicL.toFixed(2),
+                effectiveL: +(isFlat ? cubicL * FLAT_VOLUME_FACTOR : cubicL).toFixed(2),
+                maxDimCm: +maxDimCm.toFixed(1),
+                category
+            };
+        }
+
+        function smallestVehicleFor(volumeL, maxDimCm) {
+            for (const t of VEHICLE_TIERS) {
+                const tier = TIER_BY_ID[t.id];
+                if (volumeL <= tier.usableL && maxDimCm <= tier.maxDimCm) return t.id;
+            }
+            return null;
+        }
+
+        function isCustomerDestination(dest) {
+            if (dest === undefined || dest === null) return true;
+            const d = dest.toString().trim();
+            return d === '' || d.toUpperCase() === 'CUSTOMER_ADDRESS';
+        }
+
+        function isResidentialAddress(addrType) {
+            if (addrType === undefined || addrType === null) return true;
+            const a = addrType.toString().trim();
+            return a === '' || a.toUpperCase() === 'RESIDENTIAL';
+        }
+
+        // RFC4180-ish CSV splitter: honours quoted fields containing commas
+        function splitCsvLine(line) {
+            const out = [];
+            let cur = '', inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+                const c = line[i];
+                if (inQuotes) {
+                    if (c === '"') {
+                        if (line[i + 1] === '"') { cur += '"'; i++; }
+                        else inQuotes = false;
+                    } else cur += c;
+                } else {
+                    if (c === '"') inQuotes = true;
+                    else if (c === ',') { out.push(cur); cur = ''; }
+                    else cur += c;
+                }
+            }
+            out.push(cur);
+            return out.map(s => s.trim());
+        }
+
+        // Header aliases -> canonical field. Amazon exports vary in wording.
+        const HEADER_ALIASES = {
+            tba: ['tba', 'tracking id', 'trackingid', 'tracking_id', 'tracking number', 'scannable id'],
+            postal: ['postal', 'zip', 'zipcode', 'zip code', 'postal code', 'postcode'],
+            destination: ['destination', 'dest', 'destination type'],
+            addressType: ['address type', 'addresstype', 'address_type'],
+            length: ['package length', 'length', 'pkg length'],
+            width: ['package width', 'width', 'pkg width'],
+            height: ['package height', 'height', 'pkg height'],
+            weight: ['package weight', 'weight', 'pkg weight']
+        };
+
+        function mapHeaders(headerCells) {
+            const norm = headerCells.map(h => h.replace(/^\uFEFF/, '').trim().toLowerCase());
+            const idx = {};
+            Object.keys(HEADER_ALIASES).forEach(field => {
+                idx[field] = -1;
+                for (const alias of HEADER_ALIASES[field]) {
+                    const found = norm.indexOf(alias);
+                    if (found !== -1) { idx[field] = found; break; }
+                }
+            });
+            return idx;
+        }
+
+        // UNIQUE COLOR PALETTE
+        const DRIVER_COLORS = [
+            '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
+            '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe',
+            '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000',
+            '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080',
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
+            '#dfe6e9', '#fd79a8', '#00b894', '#e17055', '#0984e3'
+        ];
+
+        // INIT MAP
+        function initMap() {
+            map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                center: [-75.305, 40.101],
+                zoom: 9,
+                pitch: 40,
+                bearing: 0,
+                antialias: true
+            });
+            map.addControl(new maplibregl.NavigationControl());
+        }
+        window.onload = () => {
+            initMap();
+            renderExceptions();
+            renderLoadSummary();
+        };
+
+        // TABS
+        document.querySelectorAll('.input-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.input-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.input-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab + 'Panel').classList.add('active');
+            });
+        });
+
+        // PARSERS
+        function parseTextInput(text) {
+            const lines = text.split('\n');
+            const parsed = { loosePackages: [], bags: [] };
+            let currentBag = null;
+            let emptyLineCount = 0;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line === '') {
+                    emptyLineCount++;
+                    if (emptyLineCount >= 2 && currentBag) {
+                        if (currentBag.items.length > 0) parsed.bags.push(currentBag);
+                        currentBag = null;
+                    }
+                    continue;
+                }
+                emptyLineCount = 0;
+                const isTbaLine = line.includes(',') && /TBA\d+/i.test(line);
+
+                if (isTbaLine) {
+                    const parts = line.split(',');
+                    if (parts.length >= 2) {
+                        const tba = parts[0].trim().toUpperCase();
+                        const postal = parts[1].trim();
+                        if (tba && postal) {
+                            if (currentBag) currentBag.items.push({ tba, postal });
+                            else parsed.loosePackages.push({ tba, postal });
+                        }
+                    }
+                } else {
+                    if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+                    currentBag = { name: line, items: [] };
+                }
+            }
+            if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+            return parsed;
+        }
+
+        document.getElementById('parseText').addEventListener('click', () => {
+            const text = document.getElementById('textInput').value;
+            const statusEl = document.getElementById('parseStatus');
+            if (!text.trim()) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No input to parse';
+                return;
+            }
+            const parsed = parseTextInput(text);
+            allParsedLoose = parsed.loosePackages;
+            allParsedBags = parsed.bags;
+            const total = parsed.loosePackages.length + parsed.bags.reduce((s, b) => s + b.items.length, 0);
+            if (total === 0) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No valid packages found.';
+            } else {
+                statusEl.className = 'parse-status success';
+                statusEl.textContent = `✓ Loaded ${total} packages`;
+                document.getElementById('fileInfo').textContent = `${total} pkgs from text`;
+                rescreenAll();
+            }
+        });
+
+        document.getElementById('clearText').addEventListener('click', () => {
+            document.getElementById('textInput').value = '';
+            document.getElementById('parseStatus').innerHTML = '';
+            allParsedLoose = []; allParsedBags = [];
+            document.getElementById('fileInfo').textContent = '';
+            rescreenAll();
+        });
+
+        // Toggling the switch re-screens what is already loaded -- no re-upload
+        document.getElementById('residentialOnly').addEventListener('change', rescreenAll);
+
+        // Parses both the legacy tba/postal CSV and the new Amazon export with
+        // Destination, Address Type and package dimensions.
+        function parseCSV(csvText) {
+            const lines = csvText.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+            if (lines.length < 2) return null;
+
+            const idx = mapHeaders(splitCsvLine(lines[0]));
+            if (idx.tba === -1 || idx.postal === -1) return null;
+
+            const pkgs = [];
+            for (let i = 1; i < lines.length; i++) {
+                const d = splitCsvLine(lines[i]);
+                const tba = (d[idx.tba] || '').toUpperCase();
+                const postal = (d[idx.postal] || '').trim();
+                if (!tba || !postal) continue;
+
+                const vol = computePackageVolume(
+                    idx.length !== -1 ? d[idx.length] : null,
+                    idx.width  !== -1 ? d[idx.width]  : null,
+                    idx.height !== -1 ? d[idx.height] : null
+                );
+
+                pkgs.push({
+                    tba,
+                    postal,
+                    destination: idx.destination !== -1 ? (d[idx.destination] || '') : '',
+                    addressType: idx.addressType !== -1 ? (d[idx.addressType] || '') : '',
+                    lengthCm: parseDimension(idx.length !== -1 ? d[idx.length] : null) || 0,
+                    widthCm:  parseDimension(idx.width  !== -1 ? d[idx.width]  : null) || 0,
+                    heightCm: parseDimension(idx.height !== -1 ? d[idx.height] : null) || 0,
+                    weight:   idx.weight !== -1 ? (d[idx.weight] || '') : '',
+                    cubicL: vol.cubicL,
+                    volumeL: vol.effectiveL,
+                    maxDimCm: vol.maxDimCm,
+                    category: vol.category
+                });
+            }
+            return pkgs.length > 0 ? pkgs : null;
+        }
+
+        // =====================================================
+        // INTAKE SCREENING
+        // Splits parsed packages into deliverable / FC return / held.
+        // Runs on every parse and again whenever the residential
+        // switch is toggled, so the counts always match the switch.
+        // =====================================================
+        function screenPackages(pkgs, bagName = null) {
+            const out = { deliverable: [], fc: [], held: [] };
+            const residentialOnly = document.getElementById('residentialOnly').checked;
+            pkgs.forEach(p => {
+                if (!isCustomerDestination(p.destination)) {
+                    out.fc.push({ ...p, bagName, reason: `Destination "${p.destination}" is a facility code` });
+                } else if (residentialOnly && !isResidentialAddress(p.addressType)) {
+                    out.held.push({ ...p, bagName, reason: `Address type "${p.addressType}" is not residential` });
+                } else {
+                    out.deliverable.push(p);
+                }
+            });
+            return out;
+        }
+
+        function rescreenAll() {
+            fcReturns = [];
+            addressHolds = [];
+            const loose = screenPackages(allParsedLoose);
+            fcReturns.push(...loose.fc);
+            addressHolds.push(...loose.held);
+            loosePackages = loose.deliverable;
+
+            bagFiles = [];
+            allParsedBags.forEach(b => {
+                const r = screenPackages(b.items, b.name);
+                fcReturns.push(...r.fc);
+                addressHolds.push(...r.held);
+                if (r.deliverable.length > 0) bagFiles.push({ name: b.name, items: r.deliverable });
+            });
+
+            renderBagList();
+            renderExceptions();
+            renderLoadSummary();
+        }
+
+        document.getElementById('csvFile').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            let pending = files.length;
+            const collected = [];
+            const failed = [];
+
+            // Every reader must call this exactly once, success or failure,
+            // or the counter never reaches zero and the panel never renders.
+            const settle = () => {
+                if (--pending > 0) return;
+                allParsedLoose = collected;
+                rescreenAll();
+                const info = document.getElementById('fileInfo');
+                if (collected.length > 0) {
+                    info.textContent = `${collected.length} packages read from ${files.length - failed.length} file(s)`;
+                    info.style.color = '#aaa';
+                } else {
+                    info.textContent = 'No packages found. Check that the file has tracking and ZIP columns.';
+                    info.style.color = '#d90429';
+                }
+                if (failed.length > 0) {
+                    info.textContent += ` — could not read: ${failed.join(', ')}`;
+                    info.style.color = '#fca311';
+                }
+            };
+
+            Array.from(files).forEach(f => {
+                const r = new FileReader();
+                r.onload = (evt) => {
+                    try {
+                        const res = parseCSV(evt.target.result);
+                        if (res) collected.push(...res);
+                        else failed.push(f.name);
+                    } catch (err) {
+                        console.error(`Parse failed for ${f.name}`, err);
+                        failed.push(f.name);
+                    }
+                    settle();
+                };
+                r.onerror = () => { failed.push(f.name); settle(); };
+                r.onabort = () => { failed.push(f.name); settle(); };
+                r.readAsText(f);
+            });
+        });
+
+        document.getElementById('bagFile').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            Array.from(files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const res = parseCSV(evt.target.result);
+                        if (res) allParsedBags.push({ name: file.name, items: res });
+                        else console.warn(`No tracking/postal columns in bag file ${file.name}`);
+                    } catch (err) {
+                        console.error(`Bag parse failed for ${file.name}`, err);
+                    }
+                    rescreenAll();
+                };
+                reader.onerror = () => rescreenAll();
+                reader.readAsText(file);
+            });
+            document.getElementById('bagFile').value = "";
+        });
+
+        function renderBagList() {
+            const l = document.getElementById('bagList');
+            l.innerHTML = '';
+            bagFiles.forEach((b, i) => {
+                l.innerHTML += `
+                    <div style="display:flex; justify-content:space-between; margin-top:2px; padding:2px; border-bottom:1px solid #333;">
+                        <span>📦 ${b.name} (${b.items.length})</span>
+                        <span style="color:#d90429;cursor:pointer;font-weight:bold;" onclick="removeBag(${i})">x</span>
+                    </div>`;
+            });
+        }
+        window.removeBag = (i) => { allParsedBags.splice(i, 1); rescreenAll(); };
+
+        // =====================================================
+        // LOAD SUMMARY -- cubic volume and what vehicle it needs
+        // =====================================================
+        function renderLoadSummary() {
+            const el = document.getElementById('loadSummary');
+            const all = [...loosePackages, ...bagFiles.flatMap(b => b.items)];
+            if (all.length === 0) { el.innerHTML = ''; return; }
+
+            let effective = 0, cubic = 0, maxDim = 0;
+            const cats = { FLAT: 0, SMALL: 0, MEDIUM: 0, LARGE: 0, OVERSIZE: 0, UNKNOWN: 0 };
+            all.forEach(p => {
+                effective += (p.volumeL || 0);
+                cubic += (p.cubicL || 0);
+                maxDim = Math.max(maxDim, p.maxDimCm || 0);
+                cats[p.category || 'UNKNOWN']++;
+            });
+
+            const needed = smallestVehicleFor(effective, maxDim);
+            const vehText = needed
+                ? `${TIER_BY_ID[needed].label} minimum`
+                : 'Too large for one vehicle';
+            const vehColor = needed ? TIER_BY_ID[needed].color : '#d90429';
+
+            const order = ['FLAT', 'SMALL', 'MEDIUM', 'LARGE', 'OVERSIZE'];
+            let bar = '', legend = '';
+            order.forEach(c => {
+                if (!cats[c]) return;
+                const pct = (cats[c] / all.length) * 100;
+                bar += `<div class="cat-seg" style="width:${pct}%;background:${CATEGORY_COLORS[c]}" title="${c}: ${cats[c]}"></div>`;
+                legend += `<span style="color:#999"><span class="cat-dot" style="background:${CATEGORY_COLORS[c]}"></span>${c.toLowerCase()} ${cats[c]}</span>`;
+            });
+
+            const dimNote = maxDim > 0
+                ? `<div class="load-row"><span>Longest item</span><strong style="color:${maxDim > 120 ? '#fca311' : '#eee'}">${maxDim} cm</strong></div>`
+                : '';
+
+            el.innerHTML = `
+                <div class="load-summary">
+                    <div class="load-row"><span>Routable packages</span><strong>${all.length}</strong></div>
+                    <div class="load-row"><span>Space needed</span><strong>${Math.round(effective)} L</strong></div>
+                    ${dimNote}
+                    <div class="load-row"><span>Fits in</span><strong style="color:${vehColor}">${vehText}</strong></div>
+                    <div class="cat-bar">${bar}</div>
+                    <div class="cat-legend">${legend}</div>
+                    <div style="color:#666; margin-top:6px; font-size:0.9em;">
+                        Raw cubic ${Math.round(cubic)} L; flats charged at 25%.
+                    </div>
+                </div>`;
+        }
+
+        // =====================================================
+        // EXCEPTION STREAMS -- FC returns and held addresses
+        // =====================================================
+        function renderExceptions() {
+            const el = document.getElementById('exceptionButtons');
+            let html = '';
+            if (fcReturns.length > 0) {
+                html += `<button class="exception-btn btn-fc" onclick="openPage('fcPage')">
+                    <span>Fulfillment center returns</span><span class="count">${fcReturns.length}</span></button>`;
+            }
+            if (addressHolds.length > 0) {
+                html += `<button class="exception-btn btn-hold" onclick="openPage('holdPage')">
+                    <span>Held: non-residential</span><span class="count">${addressHolds.length}</span></button>`;
+            }
+            el.innerHTML = html;
+            buildExceptionTable('fcBody', fcReturns, 'fc');
+            buildExceptionTable('holdBody', addressHolds, 'hold');
+        }
+
+        function buildExceptionTable(targetId, rows, kind) {
+            const el = document.getElementById(targetId);
+            if (!el) return;
+            if (rows.length === 0) {
+                el.innerHTML = `<div class="empty-state">Nothing here right now.</div>`;
+                return;
+            }
+            const banner = kind === 'fc'
+                ? `<div class="banner banner-fc"><strong>These ${rows.length} package(s) are not deliverable.</strong>
+                     Their destination is a facility code rather than a customer address, so they stay at the station
+                     and go back to the fulfillment center. They were excluded from every route.</div>`
+                : `<div class="banner banner-hold"><strong>${rows.length} package(s) are on hold.</strong>
+                     Their address type is not residential and <em>Residential only</em> is on.
+                     Turn the switch off to route them.</div>`;
+
+            let body = '';
+            rows.forEach(r => {
+                body += `<tr>
+                    <td><code>${r.tba}</code></td>
+                    <td>${r.postal || '&mdash;'}</td>
+                    <td>${r.destination || '<span style="color:#666">blank</span>'}</td>
+                    <td>${r.addressType || '<span style="color:#666">blank</span>'}</td>
+                    <td>${r.cubicL ? r.cubicL + ' L' : '&mdash;'}</td>
+                    <td>${r.bagName ? '📦 ' + r.bagName : 'Loose'}</td>
+                    <td style="color:#999">${r.reason || ''}</td>
+                </tr>`;
+            });
+
+            el.innerHTML = banner + `<table class="exc-table">
+                <thead><tr>
+                    <th>Tracking ID</th><th>ZIP</th><th>Destination</th>
+                    <th>Address type</th><th>Cubic</th><th>Source</th><th>Why</th>
+                </tr></thead><tbody>${body}</tbody></table>`;
+        }
+
+        // Adds any server-reported exceptions the client did not already know
+        // about, keyed by tracking number so a re-run never duplicates rows.
+        function mergeExceptions(serverFc, serverHolds) {
+            const add = (target, incoming) => {
+                if (!Array.isArray(incoming) || incoming.length === 0) return;
+                const seen = new Set(target.map(x => x.tba));
+                incoming.forEach(x => {
+                    if (!seen.has(x.tba)) { target.push(x); seen.add(x.tba); }
+                });
+            };
+            add(fcReturns, serverFc);
+            add(addressHolds, serverHolds);
+            renderExceptions();
+        }
+
+        window.openPage = (id) => document.getElementById(id).classList.add('show');
+        window.closePage = (id) => document.getElementById(id).classList.remove('show');
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') document.querySelectorAll('.page-overlay.show').forEach(p => p.classList.remove('show'));
+        });
+
+        window.exportExceptions = (kind) => {
+            const rows = kind === 'fc' ? fcReturns : addressHolds;
+            if (rows.length === 0) return;
+            let csv = "TBA,POSTAL,DESTINATION,ADDRESS_TYPE,CUBIC_L,SOURCE,REASON\n";
+            rows.forEach(r => {
+                csv += `${r.tba},${r.postal},"${r.destination || ''}","${r.addressType || ''}",${r.cubicL || 0},"${r.bagName || 'Loose'}","${r.reason || ''}"\n`;
+            });
+            const b = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(b);
+            a.download = kind === 'fc' ? 'FC_Returns.csv' : 'Held_NonResidential.csv';
+            a.click();
+        };
+
+        function addManualDriver() {
+            const blockSelect = document.getElementById('blockTime');
+            const h = parseFloat(blockSelect.value);
+            const veh = document.getElementById('driverVehicle').value;
+            drivers.push({ id: drivers.length + 1, maxHours: h, maxPackages: 45, vehicle: veh });
+            renderDriverList();
+            const container = document.getElementById('driverList');
+            setTimeout(() => container.scrollTop = container.scrollHeight, 0);
+        }
+
+        window.removeDriver = (index = -1) => {
+            if (drivers.length === 0) return;
+            if (index > -1) drivers.splice(index, 1);
+            else drivers.pop();
+            reindexDrivers();
+            renderDriverList();
+        };
+
+        function reindexDrivers() { drivers.forEach((d, i) => { d.id = i + 1; }); }
+
+        function renderDriverList() {
+            // If a plan is already on screen, the roster no longer matches it.
+            const stale = allCalculatedRoutes.length > 0;
+            const recalcBtn = document.getElementById('recalcBtn');
+            if (recalcBtn) {
+                recalcBtn.textContent = stale ? 'Recalculate (fleet changed)' : 'Recalculate';
+            }
+
+            const l = document.getElementById('driverList');
+            l.innerHTML = '';
+            drivers.forEach((d, i) => {
+                const div = document.createElement('div');
+                div.className = 'driver-item';
+                const tier = TIER_BY_ID[d.vehicle || 'SUV'];
+                div.innerHTML = `
+                    <span style="display:flex; align-items:center; gap:8px;">
+                        <span style="color:#fca311; font-weight:bold;">D${d.id}</span> 
+                        <span>${d.maxHours}h</span>
+                        <span class="veh-badge" style="background:${tier.color};color:#121212;">${tier.label}</span>
+                        <span style="color:#666; font-size:0.85em;">${tier.usableL}L</span>
+                    </span>
+                    <button class="btn-remove-driver" onclick="removeDriver(${i})" title="Remove Driver">×</button>
+                `;
+                l.appendChild(div);
+            });
+            const calcBtn = document.getElementById('findRoutes');
+            if (drivers.length > 0) {
+                calcBtn.textContent = `Calculate (${drivers.length} Drivers)`;
+                calcBtn.style.opacity = '1';
+            } else {
+                calcBtn.textContent = 'Calculate';
+            }
+        }
+
+        document.getElementById('addDriver').addEventListener('click', addManualDriver);
+        document.addEventListener('keydown', (e) => {
+            const activeTag = document.activeElement.tagName.toLowerCase();
+            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
+            if (e.key === '=' || e.key === '+') { e.preventDefault(); addManualDriver(); }
+            if (e.key === '-' || e.key === '_') { e.preventDefault(); removeDriver(); }
+        });
+
+        document.getElementById('autoPlan').addEventListener('click', () => {
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert("Load packages first");
+            const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
+            const veh = document.getElementById('autoVehicle').value;
+            document.getElementById('autoPlan').textContent = 'Thinking...';
+            let vFleet = [];
+            for (let i = 0; i < 200; i++) vFleet.push({ id: i + 1, maxHours: maxH, maxPackages: 48, vehicle: veh });
+            runBackend(vFleet, 'auto', maxH);
+        });
+
+        // Reruns the plan in place using whatever fleet is on screen right now.
+        // Add or remove drivers, then press this -- no page refresh needed.
+        document.getElementById('recalcBtn').addEventListener('click', () => {
+            if (drivers.length === 0) {
+                return alert("No drivers in the fleet. Add drivers, or use Auto-Plan.");
+            }
+            document.getElementById('recalcBtn').textContent = 'Recalculating...';
+            runBackend(drivers, 'manual', 0);
+            setTimeout(() => document.getElementById('recalcBtn').textContent = 'Recalculate', 50);
         });
 
         document.getElementById('findRoutes').addEventListener('click', () => {
-            const locationInputs = Array.from(document.querySelectorAll('.location'));
-            const waypoints = locationInputs.map(input => input.value).filter(value => value.trim() !== '');
-            const numDrivers = document.getElementById('numDrivers').value;
-
-            fetch('/calculate-routes', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ waypoints, numDrivers })
-            })
-            .then(response => response.json())
-            .then(routes => {
-                const routeDetails = document.getElementById('routeDetails');
-                routeDetails.innerHTML = '';
-                routes.forEach((route, index) => {
-                    let summaryPanel = document.createElement('div');
-                    summaryPanel.classList.add('summary-panel');
-                    summaryPanel.innerHTML = `<b>Route for Driver ${index + 1}</b><br>`;
-                    route.forEach(stop => {
-                        summaryPanel.innerHTML += `${stop.address}<br>`;
-                        const marker = new google.maps.Marker({
-                            position: stop.coordinates,
-                            map: map,
-                            label: `${index + 1}`
-                        });
-                    });
-                    routeDetails.appendChild(summaryPanel);
-
-                    // Plot route on the map
-                    const routePath = route.map(stop => stop.coordinates);
-                    const routePolyline = new google.maps.Polyline({
-                        path: routePath,
-                        geodesic: true,
-                        strokeColor: getRandomColor(),
-                        strokeOpacity: 1.0,
-                        strokeWeight: 2
-                    });
-                    routePolyline.setMap(map);
-                });
-            });
+            if (drivers.length === 0) return alert("Add drivers or use Auto-Plan");
+            document.getElementById('findRoutes').textContent = 'Calculating...';
+            runBackend(drivers, 'manual', 0);
         });
 
-        function getRandomColor() {
-            const letters = '0123456789ABCDEF';
-            let color = '#';
-            for (let i = 0; i < 6; i++) {
-                color += letters[Math.floor(Math.random() * 16)];
+        // =====================================================
+        // PLAN TEARDOWN
+        // Every recalculation starts from a clean slate. Without this,
+        // markers stack up, map filters stay stuck on the old driver,
+        // and the scanner keeps resolving tracking numbers from the
+        // previous plan -- which is why a refresh used to be required.
+        // Packages and the driver roster survive; only the plan is cleared.
+        // =====================================================
+        function resetPlan({ keepPanels = false } = {}) {
+            allCalculatedRoutes = [];
+            tbaLookup = {};
+
+            mapLayers.forEach(obj => obj.marker.remove());
+            mapLayers = [];
+            if (map) {
+                if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+                if (map.getSource('route-lines')) map.removeSource('route-lines');
             }
-            return color;
+
+            document.getElementById('routeList').innerHTML = '';
+            document.getElementById('zipMenu').innerHTML = '';
+            document.getElementById('zipMenu').classList.remove('show');
+
+            ['statRoutes', 'statPkgs', 'statStops', 'statVolume'].forEach(id => {
+                document.getElementById(id).innerText = '0';
+            });
+            document.getElementById('statVehicleMix').innerHTML = '';
+
+            const sInput = document.getElementById('scanInput');
+            sInput.value = '';
+            document.getElementById('driverDisplay').textContent = '--';
+            document.getElementById('driverDisplay').style.color = '#fff';
+            document.getElementById('stopDisplay').textContent = 'Waiting...';
+            window.speechSynthesis.cancel();
+
+            if (!keepPanels) {
+                document.getElementById('resultsArea').style.display = 'none';
+                document.getElementById('scanPanel').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'none';
+            }
         }
+
+        // Clears the plan AND the fleet, but keeps the loaded manifest.
+        window.clearPlan = () => {
+            resetPlan();
+            drivers = [];
+            renderDriverList();
+        };
+
+        function setPlanningState(busy) {
+            const auto = document.getElementById('autoPlan');
+            const calc = document.getElementById('findRoutes');
+            [auto, calc].forEach(b => {
+                b.disabled = busy;
+                b.style.opacity = busy ? '0.6' : '1';
+                b.style.cursor = busy ? 'wait' : 'pointer';
+            });
+        }
+
+        // Restores button captions after a run finishes or fails.
+        function restoreButtons() {
+            document.getElementById('autoPlan').textContent = 'Auto-Plan';
+            const dLen = drivers.length;
+            document.getElementById('findRoutes').textContent =
+                dLen > 0 ? `Calculate (${dLen} Drivers)` : 'Calculate';
+            setPlanningState(false);
+        }
+
+        function runBackend(driverSet, mode, baseMax) {
+            setPlanningState(true);
+            resetPlan({ keepPanels: true });
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    loosePackages,
+                    bags: bagFiles,
+                    drivers: driverSet,
+                    mode: mode,
+                    residentialOnly: document.getElementById('residentialOnly').checked
+                })
+            })
+                .then(res => res.json())
+                .then(payload => {
+                    // Response is { routes, fcReturns, addressHolds, vehicleTiers }.
+                    // Older builds returned a bare array -- accept both.
+                    const routes = Array.isArray(payload) ? payload : payload.routes;
+                    if (!Array.isArray(routes)) throw new Error(payload.error || 'Unexpected response from server');
+                    if (!Array.isArray(payload)) {
+                        serverVehicleTiers = payload.vehicleTiers || null;
+                        // The client screens packages BEFORE sending, so the server
+                        // normally reports zero exceptions. Merge as a safety net --
+                        // never assign, or an empty server list erases the real one.
+                        mergeExceptions(payload.fcReturns, payload.addressHolds);
+                    }
+                    const active = routes.filter(r => r.route.length > 0);
+                    allCalculatedRoutes = active;
+                    if (mode === 'auto') {
+                        const blocks = [2, 2.5, 3, 3.5, 4];
+                        drivers = [];
+                        let seq = 0;
+                        active.forEach((r) => {
+                            // Overflow is not a driver. Adding it to the roster
+                            // created a 0-hour phantom that later runs tried to
+                            // fill, which broke every recalculation.
+                            if (r.isOverflow || r.driverId.toString().includes("OVERFLOW")) return;
+                            const i = seq++;
+                            const needed = r.totalHours;
+                            let rec = baseMax;
+                            for (let b of blocks) if (b >= needed) { rec = b; break; }
+                            if (rec > baseMax) rec = baseMax;
+                            r.driverMax = rec;
+                            r.driverId = i + 1;
+                            drivers.push({
+                                id: i + 1, maxHours: baseMax, maxPackages: 48,
+                                recommendedHours: rec,
+                                vehicle: r.requiredVehicle && r.requiredVehicle !== 'UNFITTABLE'
+                                    ? r.requiredVehicle
+                                    : document.getElementById('autoVehicle').value
+                            });
+                        });
+                        renderDriverList();
+                        // REMOVED ALERT: alert(`Plan: ${active.length} Routes Generated.`);
+                    }
+                    restoreButtons();
+                    document.getElementById('resultsArea').style.display = 'block';
+                    document.getElementById('scanPanel').style.display = 'block';
+                    document.getElementById('dashboard').style.display = 'flex'; // Show Dashboard
+                    document.getElementById('scanInput').focus();
+                    
+                    renderGroupedView(active);
+                    buildMap(active);
+                    buildLookup(active);
+                    updateDashboard(active);
+                })
+                .catch(e => {
+                    console.error(e);
+                    restoreButtons();
+                    const statusEl = document.getElementById('parseStatus');
+                    statusEl.className = 'parse-status error';
+                    statusEl.textContent = `Routing failed: ${e.message}. Nothing was changed — adjust and try again.`;
+                });
+        }
+
+        // --- DASHBOARD LOGIC ---
+        function updateDashboard(routes) {
+            const totalRoutes = routes.length;
+            let totalPkgs = 0;
+            let totalStops = 0;
+            let totalVolume = 0;
+            let zipMap = {};
+            const vehMix = {};
+
+            routes.forEach(r => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const dName = isOverflow ? "Overflow" : `D${r.driverId}`;
+
+                totalVolume += (r.totalVolumeL || 0);
+                if (r.requiredVehicle) vehMix[r.requiredVehicle] = (vehMix[r.requiredVehicle] || 0) + 1;
+
+                r.route.forEach((stop) => {
+                    if (isWarehouse(stop)) return;
+                    const count = stop.tbas ? stop.tbas.length : 0;
+                    totalPkgs += count;
+                    totalStops++;
+
+                    const zipMatch = stop.address.match(/\b\d{5}\b/);
+                    if (zipMatch) {
+                        const zip = zipMatch[0];
+                        if (!zipMap[zip]) zipMap[zip] = new Set();
+                        zipMap[zip].add({ name: dName, color: color });
+                    }
+                });
+            });
+
+            document.getElementById('statRoutes').innerText = totalRoutes;
+            document.getElementById('statPkgs').innerText = totalPkgs;
+            document.getElementById('statStops').innerText = totalStops;
+            document.getElementById('statVolume').innerText = Math.round(totalVolume);
+
+            const mixEl = document.getElementById('statVehicleMix');
+            mixEl.innerHTML = VEHICLE_TIERS
+                .filter(t => vehMix[t.id])
+                .map(t => `<span class="veh-badge" style="background:${t.color};color:#121212;margin-left:6px;">${vehMix[t.id]}× ${t.label}</span>`)
+                .join('');
+
+            // Build Zip Menu
+            const menu = document.getElementById('zipMenu');
+            menu.innerHTML = '';
+            Object.keys(zipMap).sort().forEach(zip => {
+                const drivers = Array.from(zipMap[zip]);
+                let tags = '';
+                drivers.forEach(d => {
+                    tags += `<span class="zip-tag" style="background:${d.color}">${d.name}</span>`;
+                });
+                
+                const row = document.createElement('div');
+                row.className = 'zip-row';
+                row.innerHTML = `<span style="color:#aaa">${zip}</span> <div>${tags}</div>`;
+                menu.appendChild(row);
+            });
+        }
+
+        function toggleZipMenu() {
+            document.getElementById('zipMenu').classList.toggle('show');
+        }
+
+        // Close dropdown if clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.zip-btn')) {
+                const dropdowns = document.getElementsByClassName("zip-content");
+                for (let i = 0; i < dropdowns.length; i++) {
+                    if (dropdowns[i].classList.contains('show')) {
+                        dropdowns[i].classList.remove('show');
+                    }
+                }
+            }
+        }
+
+        function renderGroupedView(routes) {
+            const container = document.getElementById('routeList');
+            container.innerHTML = '';
+            const groups = {};
+            routes.forEach(r => {
+                let key = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(r);
+            });
+            Object.keys(groups).sort().forEach(key => {
+                const groupRoutes = groups[key];
+                const unassignedCount = groupRoutes.reduce((s, r) =>
+                    s + r.route.reduce((t, st) => t + (isWarehouse(st) ? 0 : st.tbas.length), 0), 0);
+                const headerText = key === "OVERFLOW"
+                    ? `Unassigned — ${unassignedCount} package(s) need a driver`
+                    : `${key} Hour Blocks (${groupRoutes.length})`;
+                const color = key === "OVERFLOW" ? "red" : "#2a9d8f";
+                const header = document.createElement('div');
+                header.className = 'group-header';
+                header.style.borderColor = color;
+                header.innerHTML = `<span>${headerText}</span> <span style="font-size:0.8em">▼</span>`;
+                const content = document.createElement('div');
+                content.className = 'group-content';
+                header.onclick = () => { toggleAccordion(content); filterMapByGroup(key); };
+                groupRoutes.forEach(r => {
+                    const card = document.createElement('div');
+                    card.className = 'driver-card';
+                    let pkgCount = 0;
+                    let allTbas = [];
+                    r.route.forEach((s) => {
+                        if (isWarehouse(s)) return;
+                        pkgCount += s.tbas.length;
+                        allTbas.push(...s.tbas);
+                    });
+                    const dName = key === "OVERFLOW" ? "Overflow" : `Driver ${r.driverId}`;
+                    const driverColor = key === "OVERFLOW" ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'driver-name-header';
+                    nameEl.style.fontWeight = 'bold';
+                    nameEl.style.color = driverColor;
+                    nameEl.style.cursor = 'copy';
+                    nameEl.title = 'Click Name to Copy TBAs';
+                    nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} <span style="font-size:0.8em; color:#888;">📋</span>`;
+                    nameEl.onclick = (e) => {
+                        e.stopPropagation();
+                        const textToCopy = allTbas.join('\r\n');
+                        navigator.clipboard.writeText(textToCopy).then(() => {
+                            const originalHTML = nameEl.innerHTML;
+                            nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} ✅`;
+                            setTimeout(() => nameEl.innerHTML = originalHTML, 1000);
+                        });
+                    };
+                    const infoEl = document.createElement('div');
+                    infoEl.style.fontSize = '0.85em';
+                    infoEl.style.color = '#ccc';
+                    infoEl.style.marginTop = '4px';
+
+                    const reqTier = r.requiredVehicle && TIER_BY_ID[r.requiredVehicle]
+                        ? TIER_BY_ID[r.requiredVehicle] : null;
+                    const vehBadge = key === "OVERFLOW" ? ''
+                        : reqTier
+                            ? `<span class="veh-badge" style="background:${reqTier.color};color:#121212;">${reqTier.label}</span>`
+                            : `<span class="veh-badge" style="background:#d90429;color:#fff;">Won't fit</span>`;
+
+                    const volText = r.totalVolumeL !== undefined
+                        ? ` • ${Math.round(r.totalVolumeL)} L` : '';
+
+                    infoEl.innerHTML = `${pkgCount} Pkgs • ${formatHours(r.totalHours)}${volText} ${vehBadge}`;
+
+                    // Capacity meter against the vehicle actually assigned
+                    if (r.assignedVehicle && TIER_BY_ID[r.assignedVehicle] && key !== "OVERFLOW") {
+                        const cap = TIER_BY_ID[r.assignedVehicle].usableL;
+                        const pct = Math.min(100, Math.round((r.totalVolumeL / cap) * 100));
+                        const fillColor = pct > 90 ? '#d90429' : pct > 70 ? '#fca311' : '#2a9d8f';
+                        const meter = document.createElement('div');
+                        meter.className = 'capacity-meter';
+                        meter.title = `${Math.round(r.totalVolumeL)}L of ${cap}L usable in a ${TIER_BY_ID[r.assignedVehicle].label}`;
+                        meter.innerHTML = `<div class="capacity-fill" style="width:${pct}%;background:${fillColor}"></div>`;
+                        infoEl.appendChild(meter);
+                    }
+
+                    if (r.vehicleWarning) {
+                        const warn = document.createElement('div');
+                        warn.className = 'veh-warn';
+                        warn.textContent = r.vehicleWarning;
+                        infoEl.appendChild(warn);
+                    }
+                    const listEl = document.createElement('div');
+                    listEl.style.marginTop = '5px';
+                    listEl.style.paddingTop = '5px';
+                    listEl.style.borderTop = '1px solid #444';
+                    let listHtml = '';
+                    if (key === "OVERFLOW") {
+                        // Show WHY, per stop -- an unexplained list is not actionable
+                        r.route.forEach(s => {
+                            if (isWarehouse(s)) return;
+                            listHtml += `<div class="tba-row" style="border-left-color:#d90429;">
+                                <strong style="color:#ff6b6b;">${s.address}</strong> — ${s.tbas.length} pkg
+                                <div style="color:#999; margin-top:2px;">${s.overflowReason || 'No reason recorded'}</div>
+                                ${s.tbas.map(t => `<div style="color:#777;">${t}</div>`).join('')}
+                            </div>`;
+                        });
+                    } else {
+                        allTbas.forEach(t => listHtml += `<div class="tba-row">${t}</div>`);
+                    }
+                    listEl.innerHTML = listHtml;
+                    card.appendChild(nameEl);
+                    card.appendChild(infoEl);
+                    card.appendChild(listEl);
+                    card.onclick = () => {
+                        filterMapByDriver(r.driverId);
+                        document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+                        card.classList.add('selected');
+                    };
+                    content.appendChild(card);
+                });
+                container.appendChild(header);
+                container.appendChild(content);
+            });
+        }
+
+        function toggleAccordion(el) {
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function createNumberedMarker(lat, lng, number, color, isBag = false) {
+            const el = document.createElement('div');
+            el.className = isBag ? 'driver-marker bag-marker' : 'driver-marker';
+            const size = isBag ? 32 : 26;
+            el.style.width = `${size}px`;
+            el.style.height = `${size}px`;
+            el.style.backgroundColor = isBag ? '#f1faee' : color;
+            el.style.color = isBag ? color : 'white';
+            el.style.borderColor = isBag ? color : 'white';
+            el.style.fontSize = isBag ? '11px' : '12px';
+            el.innerText = number;
+            const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]);
+            return marker;
+        }
+
+        function buildMap(routes) {
+            mapLayers.forEach(obj => obj.marker.remove());
+            mapLayers = [];
+            if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+            if (map.getSource('route-lines')) map.removeSource('route-lines');
+
+            let allPoints = [];
+            let geoJsonFeatures = [];
+
+            routes.forEach((r) => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const driverNum = isOverflow ? "?" : r.driverId;
+                const groupKey = isOverflow ? "OVERFLOW" : r.driverMax.toString();
+
+                let lineCoordinates = r.route.map(s => [s.coordinates.lng, s.coordinates.lat]);
+                geoJsonFeatures.push({
+                    'type': 'Feature',
+                    'properties': { 'color': color, 'driverId': r.driverId, 'groupKey': groupKey },
+                    'geometry': { 'type': 'LineString', 'coordinates': lineCoordinates }
+                });
+
+                r.route.forEach((stop) => {
+                    if (isWarehouse(stop)) return;
+                    const isBag = stop.isBag;
+                    const displayNum = isBag ? `B${driverNum}` : driverNum;
+                    const marker = createNumberedMarker(stop.coordinates.lat, stop.coordinates.lng, displayNum, color, isBag);
+
+                    const popup = new maplibregl.Popup({ offset: 25, closeButton: false }).setHTML(`
+                        <strong style="color:${color}">Driver ${driverNum}</strong><br>
+                        ${stop.address}<br>
+                        <span style="color:#aaa">${stop.tbas ? stop.tbas.length : 0} packages</span>
+                        ${isBag ? '<br><em style="color:#9b5de5">📦 Bag</em>' : ''}
+                    `);
+                    
+                    marker.setPopup(popup);
+                    marker.addTo(map);
+                    mapLayers.push({ marker: marker, driverId: r.driverId, groupKey: groupKey });
+                    allPoints.push([stop.coordinates.lng, stop.coordinates.lat]);
+                });
+            });
+
+            // GHOST MODE LINES
+            map.addSource('route-lines', {
+                'type': 'geojson',
+                'data': { 'type': 'FeatureCollection', 'features': geoJsonFeatures }
+            });
+
+            map.addLayer({
+                'id': 'route-lines',
+                'type': 'line',
+                'source': 'route-lines',
+                'layout': { 'line-join': 'round', 'line-cap': 'round' },
+                'paint': {
+                    'line-color': ['get', 'color'],
+                    'line-width': 3,
+                    'line-opacity': 0.4  // Increased to 0.4 for better visibility (was 0.15)
+                }
+            });
+
+            if (allPoints.length) {
+                const bounds = new maplibregl.LngLatBounds();
+                allPoints.forEach(p => bounds.extend(p));
+                map.fitBounds(bounds, { padding: 80 });
+            }
+        }
+
+        // --- FILTERS (FOCUS MODE) ---
+        function filterMapByGroup(groupKey) {
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                if (obj.groupKey === groupKey) {
+                    el.style.display = '';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'groupKey', groupKey]);
+                map.setPaintProperty('route-lines', 'line-opacity', 0.8);
+                map.setPaintProperty('route-lines', 'line-width', 4);
+            }
+        }
+
+        function filterMapByDriver(dId) {
+            // MARKERS: Hide everyone except selected
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                if (obj.driverId === dId) {
+                    el.style.display = '';
+                    el.style.zIndex = '1000'; 
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+
+            // LINES: Focus Mode
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'driverId', dId]);
+                map.setPaintProperty('route-lines', 'line-opacity', 1.0); // Neon Bright
+                map.setPaintProperty('route-lines', 'line-width', 6);    // Extra Thick
+            }
+        }
+
+        window.resetMapFilter = () => {
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                el.style.display = ''; 
+                el.style.zIndex = ''; 
+            });
+            document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', null); 
+                map.setPaintProperty('route-lines', 'line-opacity', 0.4); // Back to Default
+                map.setPaintProperty('route-lines', 'line-width', 3);
+            }
+        };
+
+        function formatHours(h) { const hr = Math.floor(h); const mn = Math.round((h - hr) * 60); return `${hr}h ${mn}m`; }
+
+        function buildLookup(routes) {
+            tbaLookup = {};
+            routes.forEach(r => {
+                let stopNum = 0;
+                r.route.forEach(s => {
+                    if (isWarehouse(s)) return;
+                    stopNum++;
+                    s.tbas.forEach(t => tbaLookup[t.trim().toUpperCase()] =
+                        { d: r.driverId, s: stopNum, z: s.address, eta: s.etaSeconds });
+                });
+            });
+        }
+
+        document.getElementById('scanInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const val = e.target.value.trim().toUpperCase();
+                e.target.value = '';
+                const dDisp = document.getElementById('driverDisplay');
+                const sDisp = document.getElementById('stopDisplay');
+                let info = tbaLookup[val];
+                let foundTba = val;
+                if (!info) {
+                    const allTbas = Object.keys(tbaLookup);
+                    const matches = allTbas.filter(tba => tba.endsWith(val));
+                    if (matches.length === 1) { foundTba = matches[0]; info = tbaLookup[foundTba]; }
+                    else if (matches.length > 1) {
+                        dDisp.style.color = '#fca311';
+                        dDisp.textContent = 'MULTIPLE';
+                        sDisp.textContent = `Found ${matches.length} matches ending in "${val}". Scan more digits.`;
+                        window.speechSynthesis.cancel();
+                        window.speechSynthesis.speak(new SpeechSynthesisUtterance("Multiple matches"));
+                        return;
+                    }
+                }
+                if (info) {
+                    dDisp.style.color = '#2a9d8f';
+                    const isOverflow = info.d.toString().includes("OVERFLOW");
+                    dDisp.textContent = isOverflow ? "OVERFLOW" : `DRIVER ${info.d}`;
+                    const etaTxt = (info.eta !== undefined && info.eta !== null)
+                        ? ` • ETA +${formatHours(info.eta / 3600)}` : '';
+                    sDisp.innerHTML = `Stop #${info.s}${etaTxt}<br><span style="font-size:0.8em; color:#888;">${foundTba}</span>`;
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(isOverflow ? "Overflow" : "Driver " + info.d));
+                } else {
+                    dDisp.style.color = '#d90429';
+                    dDisp.textContent = 'NOT FOUND';
+                    sDisp.textContent = 'Check TBA or Overflow';
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Not found"));
+                }
+            }
+        });
+        document.getElementById('scanInput').addEventListener('blur', () => setTimeout(() => document.getElementById('scanInput').focus(), 100));
+
+        document.getElementById('exportScannerCsv').addEventListener('click', () => {
+            let csv = "TBA,DRIVER,STOP,ZIP,VEHICLE\n";
+            allCalculatedRoutes.forEach(r => {
+                let stopNum = 0;
+                r.route.forEach(s => {
+                    if (isWarehouse(s)) return;
+                    stopNum++;
+                    s.tbas.forEach(t => csv += `${t.trim()},${r.driverId},${stopNum},${s.address},${r.requiredVehicle || ''}\n`);
+                });
+            });
+            const b = new Blob([csv], { type: 'text/csv' });
+            const u = URL.createObjectURL(b);
+            const a = document.createElement('a'); a.href = u; a.download = `Lookup.csv`; a.click();
+        });
     </script>
 </body>
 </html>
