@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RouteFinder v10 🚀</title>
+    <title>RouteFinder v12 🚀</title>
 
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
@@ -249,13 +249,32 @@
         .veh-warn { display: block; margin-top: 5px; font-size: 0.78em; color: #ff6b6b; background: rgba(217,4,41,.12); border-left: 2px solid #d90429; padding: 4px 7px; border-radius: 0 3px 3px 0; }
         .capacity-meter { height: 5px; background: #2a2a2a; border-radius: 3px; margin-top: 6px; overflow: hidden; }
         .capacity-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+
+        /* --- Algorithm switch --- */
+        .algo-box { margin-top: 12px; padding: 10px; background: #1b1b1b; border: 1px solid #333; border-radius: 6px; }
+        .algo-toggle { display: flex; gap: 4px; }
+        .algo-opt { flex: 1; padding: 8px 6px; font-size: 0.78em; background: #2a2a2a; color: #aaa; border: 1px solid #3a3a3a; border-radius: 4px; cursor: pointer; margin: 0; font-weight: 600; }
+        .algo-opt:hover { background: #333; color: #ddd; }
+        .algo-opt.active { background: #fca311; color: #121212; border-color: #fca311; }
+        .btn-compare { background: #7209b7; color: #fff; margin-top: 8px; font-size: 0.85em; }
+        .btn-compare:hover { background: #8b1ed4; }
+
+        /* --- Comparison panel --- */
+        .cmp-table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-top: 12px; }
+        .cmp-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #444; color: #888; font-size: 0.9em; text-transform: uppercase; letter-spacing: .04em; }
+        .cmp-table td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; color: #ddd; }
+        .cmp-table td.metric { color: #999; }
+        .cmp-win { color: #2a9d8f; font-weight: bold; }
+        .cmp-lose { color: #aaa; }
+        .cmp-verdict { margin-top: 16px; padding: 12px 14px; border-radius: 6px; background: rgba(42,157,143,.12); border: 1px solid #2a9d8f; color: #7fd8cc; font-size: 0.9em; line-height: 1.5; }
+        .cmp-note { font-size: 0.8em; color: #777; margin-top: 10px; line-height: 1.5; }
     </style>
 </head>
 
 <body>
     <div class="container">
         <header>
-            <h1>RouteFinder v10 🚀</h1>
+            <h1>RouteFinder v12 🚀</h1>
         </header>
 
         <div class="main-layout">
@@ -327,6 +346,18 @@ TBA987654321,19020"></textarea>
                         </div>
                         <button id="autoPlan" class="btn-auto">Auto-Plan</button>
                         <button id="findRoutes" class="btn-action">Calculate</button>
+
+                        <div class="algo-box">
+                            <label style="margin-bottom:6px;">Routing algorithm</label>
+                            <div class="algo-toggle">
+                                <button class="algo-opt active" data-algo="greedy">Greedy seed-and-grow</button>
+                                <button class="algo-opt" data-algo="cluster">Cluster first</button>
+                            </div>
+                            <div class="help-text" id="algoHelp">
+                                Grows each route outward from a seed stop. Original engine.
+                            </div>
+                            <button id="compareAlgos" class="btn-compare">Run both &amp; compare</button>
+                        </div>
                     </div>
 
                     <details open style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
@@ -398,6 +429,19 @@ TBA987654321,19020"></textarea>
             </div>
         </div>
 
+        <div id="cmpPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#7209b7;">Algorithm comparison</h2>
+                    <div class="sub">Same packages, same fleet, both planners</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('cmpPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="cmpBody"></div></div>
+        </div>
+
         <div id="fcPage" class="page-overlay">
             <div class="page-header">
                 <div>
@@ -445,6 +489,13 @@ TBA987654321,19020"></textarea>
         let fcReturns = [];        // destination is a station/FC code
         let addressHolds = [];     // non-residential while the switch is on
         let serverVehicleTiers = null;
+        let currentAlgorithm = 'greedy';
+        let exceptionLookup = {};   // TBA -> screened-out package (FC / hold)
+
+        const ALGO_HELP = {
+            greedy:  'Grows each route outward from a seed stop. Original engine.',
+            cluster: 'Splits the map into compact groups first, then hands each group to a driver.'
+        };
 
         // The warehouse is injected at route[0] by the server. Real routes have
         // it, overflow routes do not -- so never identify it by position.
@@ -923,6 +974,7 @@ TBA987654321,19020"></textarea>
             el.innerHTML = html;
             buildExceptionTable('fcBody', fcReturns, 'fc');
             buildExceptionTable('holdBody', addressHolds, 'hold');
+            buildExceptionLookup();
         }
 
         function buildExceptionTable(targetId, rows, kind) {
@@ -973,6 +1025,21 @@ TBA987654321,19020"></textarea>
             add(fcReturns, serverFc);
             add(addressHolds, serverHolds);
             renderExceptions();
+        }
+
+        // Screened-out packages never reach a route, so they are absent from
+        // tbaLookup. Without this the scanner reports them as NOT FOUND, which
+        // reads like a bad scan instead of "this one goes in the FC bin".
+        function buildExceptionLookup() {
+            exceptionLookup = {};
+            fcReturns.forEach(p => {
+                exceptionLookup[p.tba.trim().toUpperCase()] =
+                    { kind: 'FC', postal: p.postal, reason: p.reason, destination: p.destination };
+            });
+            addressHolds.forEach(p => {
+                exceptionLookup[p.tba.trim().toUpperCase()] =
+                    { kind: 'HOLD', postal: p.postal, reason: p.reason, addressType: p.addressType };
+            });
         }
 
         window.openPage = (id) => document.getElementById(id).classList.add('show');
@@ -1066,6 +1133,158 @@ TBA987654321,19020"></textarea>
             for (let i = 0; i < 200; i++) vFleet.push({ id: i + 1, maxHours: maxH, maxPackages: 48, vehicle: veh });
             runBackend(vFleet, 'auto', maxH);
         });
+
+        // =====================================================
+        // ALGORITHM SWITCH + HEAD-TO-HEAD COMPARISON
+        // =====================================================
+        document.querySelectorAll('.algo-opt').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.algo-opt').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentAlgorithm = btn.dataset.algo;
+                document.getElementById('algoHelp').textContent = ALGO_HELP[currentAlgorithm];
+            });
+        });
+
+        // Great-circle distance, used only for reporting so the comparison
+        // numbers don't depend on the drive-time matrix.
+        function haversineKm(a, b) {
+            const R = 6371, rad = x => x * Math.PI / 180;
+            const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+            const h = Math.sin(dLat/2)**2 +
+                      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng/2)**2;
+            return 2 * R * Math.asin(Math.sqrt(h));
+        }
+
+        function scorePlan(routes) {
+            const real = routes.filter(r => !r.isOverflow && r.route.length > 0);
+            const ovf = routes.find(r => r.isOverflow);
+            let delivered = 0, maxLeg = 0;
+            const spreads = [], utils = [];
+            real.forEach(r => {
+                const stops = r.route.filter(s => !isWarehouse(s));
+                delivered += stops.reduce((a, s) => a + s.tbas.length, 0);
+                let sp = 0;
+                for (let i = 0; i < stops.length; i++)
+                    for (let j = i + 1; j < stops.length; j++)
+                        sp = Math.max(sp, haversineKm(stops[i].coordinates, stops[j].coordinates));
+                for (let i = 1; i < stops.length; i++)
+                    maxLeg = Math.max(maxLeg, haversineKm(stops[i-1].coordinates, stops[i].coordinates));
+                spreads.push(sp);
+                utils.push(r.totalHours / r.driverMax);
+            });
+            const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+            const sd = a => { const m = mean(a); return a.length ? Math.sqrt(mean(a.map(v => (v - m) ** 2))) : 0; };
+            return {
+                routes: real.length,
+                delivered,
+                overflow: ovf ? (ovf.totalPackages || 0) : 0,
+                meanSpread: mean(spreads),
+                maxLeg,
+                avgUtil: mean(utils),
+                balance: sd(utils)
+            };
+        }
+
+        function callPlanner(driverSet, mode, algorithm) {
+            return fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    loosePackages, bags: bagFiles, drivers: driverSet, mode, algorithm,
+                    residentialOnly: document.getElementById('residentialOnly').checked
+                })
+            }).then(res => res.json());
+        }
+
+        document.getElementById('compareAlgos').addEventListener('click', async () => {
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert('Load packages first');
+            const useAuto = drivers.length === 0;
+            let driverSet, mode, label;
+            if (useAuto) {
+                const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
+                const veh = document.getElementById('autoVehicle').value;
+                driverSet = Array.from({ length: 200 }, (_, i) =>
+                    ({ id: i + 1, maxHours: maxH, maxPackages: 48, vehicle: veh }));
+                mode = 'auto';
+                label = `Auto-plan, ${maxH}h blocks, up to ${veh}`;
+            } else {
+                driverSet = drivers;
+                mode = 'manual';
+                label = `${drivers.length} manual drivers`;
+            }
+
+            const btn = document.getElementById('compareAlgos');
+            btn.textContent = 'Running both...';
+            btn.disabled = true;
+            try {
+                const [g, c] = await Promise.all([
+                    callPlanner(driverSet, mode, 'greedy'),
+                    callPlanner(driverSet, mode, 'cluster')
+                ]);
+                if (!g.routes || !c.routes) throw new Error(g.error || c.error || 'Planner failed');
+                renderComparison(scorePlan(g.routes), scorePlan(c.routes), label);
+                openPage('cmpPage');
+            } catch (e) {
+                alert('Comparison failed: ' + e.message);
+            } finally {
+                btn.textContent = 'Run both & compare';
+                btn.disabled = false;
+            }
+        });
+
+        function renderComparison(g, c, label) {
+            // lowerWins: true when a smaller number is the better result
+            const rows = [
+                ['Routes produced',        g.routes,      c.routes,      null],
+                ['Packages delivered',     g.delivered,   c.delivered,   false],
+                ['Left unassigned',        g.overflow,    c.overflow,    true],
+                ['Mean route spread',      g.meanSpread,  c.meanSpread,  true,  'km'],
+                ['Longest single leg',     g.maxLeg,      c.maxLeg,      true,  'km'],
+                ['Average driver load',    g.avgUtil*100, c.avgUtil*100, null,  '%'],
+                ['Load evenness (lower=better)', g.balance*100, c.balance*100, true, ''],
+            ];
+
+            let body = '';
+            let gWins = 0, cWins = 0;
+            rows.forEach(([name, gv, cv, lowerWins, unit]) => {
+                const fmt = v => unit === 'km' ? v.toFixed(1) + ' km'
+                              : unit === '%'  ? Math.round(v) + '%'
+                              : unit === ''   ? v.toFixed(1)
+                              : v;
+                let gc = '', cc = '';
+                if (lowerWins !== null && Math.abs(gv - cv) > 0.05) {
+                    const greedyBetter = lowerWins ? gv < cv : gv > cv;
+                    gc = greedyBetter ? 'cmp-win' : 'cmp-lose';
+                    cc = greedyBetter ? 'cmp-lose' : 'cmp-win';
+                    greedyBetter ? gWins++ : cWins++;
+                }
+                body += `<tr><td class="metric">${name}</td>
+                    <td class="${gc}">${fmt(gv)}</td>
+                    <td class="${cc}">${fmt(cv)}</td></tr>`;
+            });
+
+            const verdict = cWins > gWins
+                ? `Cluster first won on ${cWins} of the compared measures.`
+                : gWins > cWins
+                    ? `Greedy won on ${gWins} of the compared measures.`
+                    : 'Both planners came out level on this manifest.';
+
+            document.getElementById('cmpBody').innerHTML = `
+                <div style="color:#aaa; font-size:0.9em; margin-bottom:4px;">${label}</div>
+                <table class="cmp-table">
+                    <thead><tr><th>Measure</th><th>Greedy seed-and-grow</th><th>Cluster first</th></tr></thead>
+                    <tbody>${body}</tbody>
+                </table>
+                <div class="cmp-verdict">${verdict}</div>
+                <div class="cmp-note">
+                    <strong>Reading this:</strong> longest single leg is the drive between two consecutive
+                    stops, which a driver pays on every leg all day. Route spread includes the drive out
+                    from the warehouse, so a high spread with a short longest leg just means a far cluster,
+                    not a bad route. Load evenness is the spread of driver utilisation, so a lower number
+                    means the work landed more evenly across the fleet.
+                </div>`;
+        }
 
         // Reruns the plan in place using whatever fleet is on screen right now.
         // Add or remove drivers, then press this -- no page refresh needed.
@@ -1163,6 +1382,7 @@ TBA987654321,19020"></textarea>
                     bags: bagFiles,
                     drivers: driverSet,
                     mode: mode,
+                    algorithm: currentAlgorithm,
                     residentialOnly: document.getElementById('residentialOnly').checked
                 })
             })
@@ -1578,45 +1798,91 @@ TBA987654321,19020"></textarea>
             });
         }
 
-        document.getElementById('scanInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                const val = e.target.value.trim().toUpperCase();
-                e.target.value = '';
-                const dDisp = document.getElementById('driverDisplay');
-                const sDisp = document.getElementById('stopDisplay');
-                let info = tbaLookup[val];
-                let foundTba = val;
-                if (!info) {
-                    const allTbas = Object.keys(tbaLookup);
-                    const matches = allTbas.filter(tba => tba.endsWith(val));
-                    if (matches.length === 1) { foundTba = matches[0]; info = tbaLookup[foundTba]; }
-                    else if (matches.length > 1) {
-                        dDisp.style.color = '#fca311';
-                        dDisp.textContent = 'MULTIPLE';
-                        sDisp.textContent = `Found ${matches.length} matches ending in "${val}". Scan more digits.`;
-                        window.speechSynthesis.cancel();
-                        window.speechSynthesis.speak(new SpeechSynthesisUtterance("Multiple matches"));
-                        return;
-                    }
-                }
-                if (info) {
-                    dDisp.style.color = '#2a9d8f';
-                    const isOverflow = info.d.toString().includes("OVERFLOW");
-                    dDisp.textContent = isOverflow ? "OVERFLOW" : `DRIVER ${info.d}`;
-                    const etaTxt = (info.eta !== undefined && info.eta !== null)
-                        ? ` • ETA +${formatHours(info.eta / 3600)}` : '';
-                    sDisp.innerHTML = `Stop #${info.s}${etaTxt}<br><span style="font-size:0.8em; color:#888;">${foundTba}</span>`;
-                    window.speechSynthesis.cancel();
-                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(isOverflow ? "Overflow" : "Driver " + info.d));
-                } else {
-                    dDisp.style.color = '#d90429';
-                    dDisp.textContent = 'NOT FOUND';
-                    sDisp.textContent = 'Check TBA or Overflow';
-                    window.speechSynthesis.cancel();
-                    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Not found"));
-                }
+        // Resolves a scan against BOTH routed packages and screened-out ones,
+        // so a fulfillment-center package is identified as such instead of
+        // falling through to "not found".
+        function resolveScan(val) {
+            if (tbaLookup[val]) return { type: 'route', tba: val, info: tbaLookup[val] };
+            if (exceptionLookup[val]) return { type: 'exception', tba: val, info: exceptionLookup[val] };
+
+            // Partial scan (last N digits) searches both maps together
+            const matches = [
+                ...Object.keys(tbaLookup).map(t => ({ t, where: 'route' })),
+                ...Object.keys(exceptionLookup).map(t => ({ t, where: 'exception' }))
+            ].filter(m => m.t.endsWith(val));
+
+            if (matches.length === 1) {
+                const m = matches[0];
+                return m.where === 'route'
+                    ? { type: 'route', tba: m.t, info: tbaLookup[m.t] }
+                    : { type: 'exception', tba: m.t, info: exceptionLookup[m.t] };
             }
+            if (matches.length > 1) return { type: 'multiple', count: matches.length };
+            return { type: 'none' };
+        }
+
+        function say(text) {
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+
+        document.getElementById('scanInput').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const val = e.target.value.trim().toUpperCase();
+            e.target.value = '';
+            if (!val) return;
+
+            const dDisp = document.getElementById('driverDisplay');
+            const sDisp = document.getElementById('stopDisplay');
+            const r = resolveScan(val);
+
+            if (r.type === 'multiple') {
+                dDisp.style.color = '#fca311';
+                dDisp.style.fontSize = '40px';
+                dDisp.textContent = 'MULTIPLE';
+                sDisp.textContent = `${r.count} packages end in "${val}". Scan more digits.`;
+                say('Multiple matches');
+                return;
+            }
+
+            if (r.type === 'exception') {
+                const isFC = r.info.kind === 'FC';
+                dDisp.style.color = isFC ? '#f032e6' : '#fca311';
+                dDisp.style.fontSize = isFC ? '30px' : '34px';
+                dDisp.textContent = isFC ? 'FC RETURN' : 'HOLD';
+                sDisp.innerHTML = isFC
+                    ? `Not for delivery &mdash; goes back to the fulfillment center` +
+                      `<br><span style="font-size:0.85em; color:#aaa;">Destination ${r.info.destination || 'n/a'}</span>` +
+                      `<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`
+                    : `Non-residential, held by the residential-only switch` +
+                      `<br><span style="font-size:0.85em; color:#aaa;">${r.info.addressType || 'unknown type'} &middot; ZIP ${r.info.postal || '--'}</span>` +
+                      `<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`;
+                say(isFC ? 'Fulfillment center return' : 'Hold, not residential');
+                return;
+            }
+
+            if (r.type === 'route') {
+                const info = r.info;
+                const isOverflow = info.d.toString().includes('OVERFLOW');
+                dDisp.style.color = isOverflow ? '#fca311' : '#2a9d8f';
+                dDisp.style.fontSize = isOverflow ? '34px' : '40px';
+                dDisp.textContent = isOverflow ? 'OVERFLOW' : `DRIVER ${info.d}`;
+                const etaTxt = (info.eta !== undefined && info.eta !== null)
+                    ? ` &middot; ETA +${formatHours(info.eta / 3600)}` : '';
+                sDisp.innerHTML = isOverflow
+                    ? `No driver assigned<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`
+                    : `Stop #${info.s}${etaTxt}<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`;
+                say(isOverflow ? 'Overflow' : 'Driver ' + info.d);
+                return;
+            }
+
+            dDisp.style.color = '#d90429';
+            dDisp.style.fontSize = '34px';
+            dDisp.textContent = 'NOT FOUND';
+            sDisp.textContent = 'This tracking number is not in the loaded manifest.';
+            say('Not found');
         });
+
         document.getElementById('scanInput').addEventListener('blur', () => setTimeout(() => document.getElementById('scanInput').focus(), 100));
 
         document.getElementById('exportScannerCsv').addEventListener('click', () => {
