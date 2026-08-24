@@ -1,13 +1,11 @@
-// =====================================================
-// ALGORITHM E — CLUSTER FIRST, THEN ASSIGN DRIVERS
+// CLUSTER FIRST, THEN HAND OUT THE WORK
 //
-// The greedy planner grows one route at a time from a seed, so which stops end
-// up together depends on who bid first. This one decides the geography before
-// any driver is involved: partition the stops into k compact groups using
-// k-medoids on the real drive-time matrix, then hand each group to a driver.
+// The other planner grows routes one at a time from a seed, which means what
+// ends up together depends on who bid first. This one settles the geography
+// before any driver is involved: split the stops into k tight groups using
+// k-medoids on the real drive times, then give each group to somebody.
 //
-// Clusters become a property of the map instead of an accident of seed order.
-// =====================================================
+// The point is that clusters come from the map, not from the order things ran in.
 
 module.exports = function makeClusterPlanner(deps) {
     const {
@@ -15,11 +13,11 @@ module.exports = function makeClusterPlanner(deps) {
         TRAFFIC_HIGHWAY, TRAFFIC_CITY,
         ABSOLUTE_MAX_STEP, MAX_LOCAL_DRIVE_SHARE,
         LARGEST_TIER, tierCapacity, classifyVehicle,
-        splitBigZips, optimizeRouteWith2Opt, annotateOverflow
+        splitBigZips, optimizeRouteWith2Opt, annotateOverflow, computeMetrics
     } = deps;
 
-    // Order a set of stops into a route: nearest-neighbour from the warehouse,
-    // then 2-opt to clean up the crossings.
+    // Turn a set of stops into a route. Nearest-neighbour out from the
+    // warehouse, then 2-opt to undo the crossings that leaves behind.
     const orderStops = (stops, matrix) => {
         if (stops.length === 0) return [];
         const remaining = [...stops];
@@ -40,7 +38,8 @@ module.exports = function makeClusterPlanner(deps) {
         return optimizeRouteWith2Opt([...withWh], matrix).filter(s => s.tbas[0] !== '_WH_');
     };
 
-    // Full cost/feasibility picture for a candidate cluster.
+    // Everything we need to know about a candidate cluster: what it costs and
+    // whether it's actually legal.
     const evaluate = (stops, driver, matrix) => {
         const route = orderStops(stops, matrix);
         if (route.length === 0) {
@@ -74,11 +73,11 @@ module.exports = function makeClusterPlanner(deps) {
         return { ok, reason, route, stem, localDrive, service, packages, volume, maxDim, maxLeg, total };
     };
 
-    // Pick k well-spread starting medoids, biased toward dense areas.
+    // Pick k starting centres, spread out but leaning toward busy areas
     const seedMedoids = (stops, k, matrix) => {
         if (stops.length === 0) return [];
         const medoids = [];
-        // First medoid: the densest stop (most package weight nearby)
+        // Start with wherever has the most packages around it
         let best = stops[0], bestScore = -Infinity;
         stops.forEach(s => {
             let near = 0;
@@ -92,7 +91,7 @@ module.exports = function makeClusterPlanner(deps) {
         });
         medoids.push(best);
 
-        // Remaining medoids: farthest from all chosen so far (k-means++ style)
+        // Then keep picking whatever's furthest from everything chosen so far
         while (medoids.length < k) {
             let far = null, farD = -1;
             stops.forEach(s => {
@@ -111,9 +110,10 @@ module.exports = function makeClusterPlanner(deps) {
         return medoids;
     };
 
-    // Assign every stop to a cluster, respecting capacity. Stops are handled in
-    // order of regret (how much worse their second choice is), so the ones with
-    // the least flexibility get their preferred cluster first.
+    // Put every stop in a cluster without breaking capacity.
+    //
+    // Order matters: stops go in by regret, meaning how much worse their second
+    // choice would be. Whoever has the least room to compromise picks first.
     const assignToClusters = (stops, medoids, drivers, matrix) => {
         const clusters = medoids.map(() => []);
         const unassigned = [];
@@ -137,7 +137,7 @@ module.exports = function makeClusterPlanner(deps) {
                 const driver = drivers[i];
                 if (!driver) continue;
 
-                // Must sit within one hop of something already in the cluster
+                // Has to be within reach of something already in the cluster
                 if (clusters[i].length > 0) {
                     let nearest = Infinity;
                     clusters[i].forEach(o => {
@@ -156,7 +156,7 @@ module.exports = function makeClusterPlanner(deps) {
         return { clusters, unassigned };
     };
 
-    // Move each medoid to the most central stop of its cluster.
+    // Shift each centre to whichever stop is most central to its cluster
     const recentreMedoids = (clusters, medoids, matrix) => {
         let moved = false;
         clusters.forEach((cluster, i) => {
@@ -181,34 +181,68 @@ module.exports = function makeClusterPlanner(deps) {
         for (let it = 0; it < iterations; it++) {
             if (!recentreMedoids(result.clusters, medoids, matrix)) break;
             const next = assignToClusters(stops, medoids, drivers, matrix);
-            // Keep the iteration that places more stops
+            // Only keep the new arrangement if it placed at least as many
             if (next.unassigned.length <= result.unassigned.length) result = next;
             else break;
         }
         return result;
     };
 
-    // Bigger clusters go to the drivers with the most capacity.
+    // Hand clusters out, heaviest first.
+    //
+    // Careful here: each cluster was built against one specific driver, so
+    // sorting both lists and zipping them can drop an SUV-sized cluster on a
+    // sedan. That bug shipped once. Every pairing gets fit-checked now, and a
+    // cluster keeps the driver it was built for unless something better is free.
     const matchClustersToDrivers = (clusters, drivers, matrix) => {
         const withLoad = clusters.map((stops, i) => ({
             stops,
             volume: stops.reduce((a, s) => a + (s.volumeL || 0), 0),
             packages: stops.reduce((a, s) => a + s.tbas.length, 0),
-            idx: i
-        }));
+            maxDim: stops.reduce((m, s) => Math.max(m, s.maxDimCm || 0), 0),
+            owner: drivers[i]
+        })).filter(c => c.stops.length > 0);
+
         withLoad.sort((a, b) => b.volume - a.volume);
 
-        const ranked = [...drivers].sort((a, b) => {
-            const ca = tierCapacity(a.vehicle || LARGEST_TIER).usableL;
-            const cb = tierCapacity(b.vehicle || LARGEST_TIER).usableL;
-            if (cb !== ca) return cb - ca;
-            return b.maxHours - a.maxHours;
+        const taken = new Set();
+        const pairs = [];
+
+        withLoad.forEach(c => {
+            // Smallest thing that fits wins, so the big vehicles stay free for
+            // the clusters that genuinely need them
+            const viable = drivers
+                .filter(d => !taken.has(d.id))
+                .filter(d => {
+                    const cap = tierCapacity(d.vehicle || LARGEST_TIER);
+                    return c.volume <= cap.usableL
+                        && c.maxDim <= cap.maxDimCm
+                        && c.packages <= VAN_CAPACITY;
+                })
+                .sort((a, b) => {
+                    const ca = tierCapacity(a.vehicle || LARGEST_TIER).usableL;
+                    const cb = tierCapacity(b.vehicle || LARGEST_TIER).usableL;
+                    if (ca !== cb) return ca - cb;          // tightest fit first
+                    return b.maxHours - a.maxHours;
+                });
+
+            let chosen = null;
+            // Prefer whoever it was built for, if they're still free
+            if (c.owner && !taken.has(c.owner.id) && viable.includes(c.owner)) {
+                chosen = c.owner;
+            } else if (viable.length > 0) {
+                chosen = viable[0];
+            }
+
+            if (chosen) {
+                taken.add(chosen.id);
+                pairs.push({ driver: chosen, stops: c.stops });
+            } else {
+                // Nothing in the fleet can carry this one
+                pairs.push({ driver: null, stops: c.stops, unfittable: true });
+            }
         });
 
-        const pairs = [];
-        withLoad.forEach((c, i) => {
-            if (ranked[i]) pairs.push({ driver: ranked[i], stops: c.stops });
-        });
         return pairs;
     };
 
@@ -245,8 +279,8 @@ module.exports = function makeClusterPlanner(deps) {
         let drivers, best;
 
         if (mode === 'auto') {
-            // Auto picks its own k: start from the capacity lower bound and add
-            // drivers until every stop lands somewhere.
+            // Auto works out its own k. Start at the capacity minimum and keep
+            // adding drivers until everything lands somewhere.
             const template = driverList[0];
             let k = Math.max(1, Math.ceil(totalPackages / VAN_CAPACITY));
             const maxK = Math.min(200, splitZips.length);
@@ -265,11 +299,17 @@ module.exports = function makeClusterPlanner(deps) {
         const pairs = matchClustersToDrivers(best.clusters, drivers, matrix);
         const results = [];
 
-        pairs.forEach(({ driver, stops }) => {
+        pairs.forEach(({ driver, stops, unfittable }) => {
             if (stops.length === 0) return;
+            if (unfittable || !driver) {
+                // Nobody can carry these. Say so rather than quietly loading
+                // them onto a driver who'll find out in the parking lot.
+                best.unassigned.push(...stops);
+                return;
+            }
             const ev = evaluate(stops, driver, matrix);
             if (!ev.ok) {
-                // Trim the stop that costs the most until the cluster fits
+                // Drop the most expensive stop until it fits
                 let working = [...stops];
                 while (working.length > 1) {
                     let worst = 0, worstD = -1;
@@ -321,6 +361,7 @@ module.exports = function makeClusterPlanner(deps) {
                 }
 
             const requiredVehicle = classifyVehicle(final.volume, final.maxDim);
+            const metrics = computeMetrics(routeWithWarehouse, matrix);
 
             console.log(`[Cluster] Driver ${driver.id} [${driver.vehicle}]: ${final.route.length} stops, ${final.packages} pkgs, ${Math.round(final.volume)}L, longest leg ${Math.round(final.maxLeg / 60)}min, ${(final.total / 3600).toFixed(2)}h/${driver.maxHours}h`);
 
@@ -332,6 +373,7 @@ module.exports = function makeClusterPlanner(deps) {
                 totalVolumeL: +final.volume.toFixed(1),
                 maxDimCm: final.maxDim,
                 diameterMin: Math.round(diameter / 60),
+                metrics,
                 requiredVehicle: requiredVehicle || 'UNFITTABLE',
                 assignedVehicle: driver.vehicle,
                 vehicleUsagePct: Math.round((final.volume / tierCapacity(driver.vehicle).usableL) * 100)

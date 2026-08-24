@@ -15,7 +15,7 @@ const startingLocation = {
     coordinates: { lat: 40.10144209586004, lng: -75.30578283911566 }
 };
 
-// --- HELPER FUNCTIONS ---
+// --- helpers ---
 
 const geocodeAddresses = async (addresses) => {
     const geocoded = [];
@@ -58,10 +58,17 @@ const geocodeAddresses = async (addresses) => {
     return geocoded;
 };
 
-const getDistanceMatrix = async (points) => {
+// Returns drive times in seconds. Also fills distMatrix (metres) as a side
+// output, since GraphHopper hands back both on the same call and mileage would
+// otherwise cost a second full pass over the grid.
+const getDistanceMatrix = async (points, distOut = null) => {
     const n = points.length;
     const UNREACHABLE = 99999;
     let matrix = Array(n).fill(null).map(() => Array(n).fill(0));
+    if (distOut) {
+        distOut.length = 0;
+        for (let i = 0; i < n; i++) distOut.push(Array(n).fill(0));
+    }
     let failedRoutes = 0;
     try {
         for (let i = 0; i < n; i++) {
@@ -73,13 +80,17 @@ const getDistanceMatrix = async (points) => {
 
                 try {
                     const response = await axios.get(url, { timeout: 2000 });
-                    if (response.data.paths) matrix[i][j] = Math.round(response.data.paths[0].time / 1000);
-                    else {
+                    if (response.data.paths) {
+                        matrix[i][j] = Math.round(response.data.paths[0].time / 1000);
+                        if (distOut) distOut[i][j] = Math.round(response.data.paths[0].distance || 0);
+                    } else {
                         matrix[i][j] = UNREACHABLE;
+                        if (distOut) distOut[i][j] = UNREACHABLE;
                         failedRoutes++;
                     }
                 } catch (e) {
                     matrix[i][j] = UNREACHABLE;
+                    if (distOut) distOut[i][j] = UNREACHABLE;
                     failedRoutes++;
                 }
             }
@@ -91,7 +102,8 @@ const getDistanceMatrix = async (points) => {
     return matrix;
 };
 
-// 2-opt with UNREACHABLE guard: skip swaps involving 99999 edges
+// 2-opt. Skips any swap touching an UNREACHABLE edge, otherwise the 99999
+// sentinel gets treated as a real distance and the result is garbage.
 const optimizeRouteWith2Opt = (route, matrix) => {
     if (route.length < 4) return route;
     let improved = true;
@@ -130,8 +142,8 @@ const optimizeRouteWith2Opt = (route, matrix) => {
     return route;
 };
 
-// Split ZIPs that exceed a driver's package count OR cubic volume into chunks.
-// Bags are never split — bag integrity is a hard rule.
+// Breaks up any ZIP too big for one driver, by count or by volume.
+// Bags are left alone. Splitting a bag is never allowed.
 const splitBigZips = (zips, maxPerChunk, maxVolumePerChunk) => {
     const result = [];
     zips.forEach(zip => {
@@ -147,7 +159,7 @@ const splitBigZips = (zips, maxPerChunk, maxVolumePerChunk) => {
             return;
         }
 
-        // Walk the ZIP's packages, opening a new chunk when either limit trips.
+        // Fill a chunk until either limit trips, then start a fresh one
         const meta = zip.pkgMeta || {};
         let chunkTbas = [], chunkVol = 0, chunkMaxDim = 0;
 
@@ -177,80 +189,373 @@ const splitBigZips = (zips, maxPerChunk, maxVolumePerChunk) => {
     return result;
 };
 
-// --- CONSTANTS ---
-const VAN_CAPACITY = 48;
-const SECONDS_PER_PKG = 180;      // 3 min per package
-const UNREACHABLE = 99999;
-const TRAFFIC_HIGHWAY = 1.0;
-const TRAFFIC_CITY = 1.1;
+// ---- TUNABLES ----
+// These are the defaults. The constraint editor in the UI can override any of
+// them for a single request: applyConfig() swaps the live values in before
+// planning, resetConfig() puts them back after. Without the reset, one
+// person's tweak would silently affect everyone's next run.
+const DEFAULTS = Object.freeze({
+    COST_PER_MILE: 0.67,
+    MPG_SEDAN: 32,
+    MPG_SUV: 24,
+    MPG_TRUCK: 17,
+    FUEL_PRICE_PER_GAL: 3.45,
+    REMOTE_ISOLATION_SECONDS: 900,
+    REMOTE_STEM_SECONDS: 2700,
+    FAIR_SHARE_SLACK: 1.35,
+    ORPHAN_MAX_ATTACH: 900,
+    SEED_PACKAGE_WEIGHT: 600,
+    SEED_NEARBY_WEIGHT: 300,
+    SEED_STEM_WEIGHT: 0.25,
+    SEED_SPREAD_WEIGHT: 0.35,
+    RELAX_DIAMETER_STEP: 300,
+    RELAX_STEP_STEP: 150,
+    SIZE_LARGE_MAX: 120,
+    SIZE_MEDIUM_MAX: 50,
+    SIZE_SMALL_MAX: 15,
+    FLAT_VOLUME_FACTOR: 0.25,
+    FLAT_MAX_VOLUME_L: 6,
+    FLAT_MAX_MIN_DIM_CM: 6,
+    VAN_CAPACITY: 48,
+    SECONDS_PER_PKG: 180,
+    TRAFFIC_HIGHWAY: 1.0,
+    TRAFFIC_CITY: 1.1,
+    PACKING_EFFICIENCY: 0.68,
+    BASE_STEM_SECONDS: 1800,
+    STEM_PER_HOUR: 900,
+    BASE_MAX_DIAMETER: 600,
+    DIAMETER_PER_HOUR: 180,
+    BASE_STEP_LIMIT: 360,
+    STEP_PER_HOUR: 90,
+    SAME_AREA_BONUS: 0.75,
+    NEAR_AREA_SECONDS: 180,
+    NEAR_AREA_BONUS: 0.40,
+    PKG_COUNT_BONUS: 0.20,
+    DIAMETER_GROWTH_PENALTY: 2.0,
+    ABSOLUTE_MAX_STEP: 900,
+    SANITY_MAX_DIAMETER: 2400,
+    MAX_LOCAL_DRIVE_SHARE: 0.55,
+    TIE_TOLERANCE_SECONDS: 180,
+});
 
-// =====================================================
-// VEHICLE CAPACITY MODEL
-//
-// Volumes are USABLE litres per zone, not brochure numbers.
-// Brochure trunk volume assumes liquid fill; real boxes leave
-// air. PACKING_EFFICIENCY converts summed package cubic into
-// the space actually consumed.
-//
-// maxDimCm = longest single item the loading aperture accepts.
-// A 142 cm item physically cannot enter a sedan trunk even
-// when the volume math says there is room.
-// =====================================================
-const PACKING_EFFICIENCY = 0.68;   // boxes waste ~32% of any space
-
-const VEHICLE_TIERS = [
-    {
-        id: 'SEDAN',
-        label: 'Sedan',
-        // Mid-size 4-door (Camry / Accord class)
-        zones: { trunk: 425, rearSeat: 280, frontPassenger: 95 },
-        maxDimCm: 120,
-        color: '#4ecdc4'
-    },
-    {
-        id: 'SUV',
-        label: 'SUV',
-        // Mid-size SUV, 2nd row UP (RAV4 / Explorer class)
-        zones: { trunk: 1000, rearSeat: 350, frontPassenger: 95 },
-        maxDimCm: 180,
-        color: '#fca311'
-    },
-    {
-        id: 'TRUCK',
-        label: 'Truck / Cargo Van',
-        // Transit Connect / pickup with cap
-        zones: { trunk: 3000, rearSeat: 400, frontPassenger: 95 },
-        maxDimCm: 250,
-        color: '#f032e6'
-    }
+// What the UI needs to draw each control: name, unit, safe range, plain-English
+// description. Keep this in sync when you add a tunable above.
+const CONFIG_SCHEMA = [
+    { key: 'VAN_CAPACITY',          label: 'Max packages per driver', unit: 'pkgs', min: 5,  max: 120, step: 1,
+      help: 'Hard ceiling on how many packages one driver can carry.' },
+    { key: 'SECONDS_PER_PKG',       label: 'Time per delivery',       unit: 'sec',  min: 30, max: 600, step: 10,
+      help: 'Service time charged for each package at a stop.' },
+    { key: 'MAX_LOCAL_DRIVE_SHARE', label: 'Max driving share',       unit: 'x',    min: 0.2, max: 0.95, step: 0.05,
+      help: 'Cap on driving between stops as a fraction of the block after the drive out. Lower means more delivering, less driving.' },
+    { key: 'ABSOLUTE_MAX_STEP',     label: 'Max gap between stops',   unit: 'sec',  min: 180, max: 2400, step: 60,
+      help: 'Longest allowed drive between two consecutive stops. The main anti-sprawl control.' },
+    { key: 'SEED_PACKAGE_WEIGHT',   label: 'Seed: pull per package',  unit: '',     min: 0,  max: 2000, step: 50,
+      help: 'How strongly a busy area attracts the first stop of a route. Raise it to start drivers where the packages are, even if that means driving further out.' },
+    { key: 'SEED_NEARBY_WEIGHT',    label: 'Seed: pull per nearby package', unit: '', min: 0, max: 1000, step: 25,
+      help: 'Counts packages in neighbouring stops when choosing where to start a driver. A ZIP with one package but five next door is a six-package area.' },
+    { key: 'SEED_SPREAD_WEIGHT',    label: 'Seed: spread between drivers', unit: 'x', min: 0, max: 2, step: 0.05,
+      help: 'Pushes each new driver away from the ones already seeded. Too high and an empty far ZIP wins just for being far away.' },
+    { key: 'SEED_STEM_WEIGHT',      label: 'Seed: cost of driving out', unit: 'x',  min: 0,  max: 3, step: 0.05,
+      help: 'How much the drive from the warehouse counts against a starting area. Keep it low, you only pay that drive once.' },
+    { key: 'ORPHAN_MAX_ATTACH',     label: 'Max orphan pickup distance', unit: 'sec', min: 120, max: 2400, step: 60,
+      help: 'How far a leftover stop may sit from the route that picks it up. Follows the max gap above unless you set it yourself.' },
+    { key: 'SANITY_MAX_DIAMETER',   label: 'Absolute route width limit', unit: 'sec', min: 300, max: 5400, step: 120,
+      help: 'Backstop on total route width. Nothing should reach this in normal use; it exists to catch a route running away.' },
+    { key: 'COST_PER_MILE',         label: 'Cost per mile', unit: '$', min: 0, max: 3, step: 0.01,
+      help: 'All-in running cost per mile: fuel, wear, depreciation. The IRS business rate is a reasonable starting point.' },
+    { key: 'FUEL_PRICE_PER_GAL',    label: 'Fuel price per gallon', unit: '$', min: 1, max: 10, step: 0.05,
+      help: 'Used with the figures below to estimate fuel separately from total running cost.' },
+    { key: 'MPG_SEDAN',             label: 'Sedan MPG', unit: 'mpg', min: 5, max: 80, step: 1,
+      help: 'Real-world mileage, not the sticker number.' },
+    { key: 'MPG_SUV',               label: 'SUV MPG', unit: 'mpg', min: 5, max: 80, step: 1,
+      help: 'Real-world mileage for the SUV tier.' },
+    { key: 'MPG_TRUCK',             label: 'Truck MPG', unit: 'mpg', min: 5, max: 80, step: 1,
+      help: 'Real-world mileage for the truck tier.' },
+    { key: 'REMOTE_ISOLATION_SECONDS', label: 'Isolated stop threshold', unit: 'sec', min: 300, max: 3600, step: 60,
+      help: 'A stop with no other stop within this drive gets flagged as isolated before planning.' },
+    { key: 'REMOTE_STEM_SECONDS',   label: 'Far-from-base threshold', unit: 'sec', min: 600, max: 7200, step: 300,
+      help: 'A stop further than this from the warehouse gets flagged, even if it has neighbours.' },
+    { key: 'FAIR_SHARE_SLACK',      label: 'Fair-share headroom', unit: 'x', min: 1, max: 3, step: 0.05,
+      help: 'How far a driver may go past an even split before they stop bidding. 1.0 forces a strict even split; higher lets clustering look more natural.' },
+    { key: 'TIE_TOLERANCE_SECONDS', label: 'Tie tolerance',           unit: 'sec',  min: 0,  max: 900, step: 30,
+      help: 'Drivers within this distance of each other count as equally close, so the least loaded one takes the stop.' },
+    { key: 'BASE_STEM_SECONDS',     label: 'Drive-out: starting value', unit: 'sec', min: 300, max: 7200, step: 300,
+      help: 'How far the shortest block (2h) may travel from the warehouse to its first stop. Longer blocks add the value below on top.' },
+    { key: 'STEM_PER_HOUR',         label: 'Drive-out: added per hour above 2h', unit: 'sec', min: 0,  max: 3600, step: 150,
+      help: 'Added for every hour past 2. At the defaults a 4h driver gets 30 + 15 + 15 = 60 min.' },
+    { key: 'BASE_MAX_DIAMETER',     label: 'Route width: starting value', unit: 'sec',  min: 180, max: 3600, step: 60,
+      help: 'How wide a 2h route may be end to end. Longer blocks add the value below on top.' },
+    { key: 'DIAMETER_PER_HOUR',     label: 'Route width: added per hour above 2h', unit: 'sec', min: 0, max: 900, step: 30,
+      help: 'Added for every hour past 2. At the defaults a 4h route may be 16 min wide before relaxation.' },
+    { key: 'BASE_STEP_LIMIT',       label: 'Step limit: starting value', unit: 'sec',  min: 120, max: 1800, step: 30,
+      help: 'Preferred gap between consecutive stops for a 2h driver, before relaxation.' },
+    { key: 'STEP_PER_HOUR',         label: 'Step limit: added per hour above 2h', unit: 'sec', min: 0, max: 600, step: 30,
+      help: 'Added for every hour past 2. Never exceeds the hard max gap set above.' },
+    { key: 'RELAX_DIAMETER_STEP',   label: 'Relaxation: width added per retry', unit: 'sec', min: 0, max: 1200, step: 60,
+      help: 'When the solver cannot find a nearby stop it retries with more slack. This is how much width each retry adds. Zero disables widening.' },
+    { key: 'RELAX_STEP_STEP',       label: 'Relaxation: gap added per retry', unit: 'sec', min: 0, max: 600, step: 30,
+      help: 'How much extra gap between stops each retry allows. Still capped by the hard max gap.' },
+    { key: 'FLAT_MAX_MIN_DIM_CM',   label: 'Envelope thickness limit', unit: 'cm', min: 1, max: 30, step: 1,
+      help: 'A package this thin or thinner counts as a flat mailer.' },
+    { key: 'FLAT_MAX_VOLUME_L',     label: 'Envelope volume limit', unit: 'L', min: 1, max: 40, step: 1,
+      help: 'A flat also has to be no bigger than this to qualify.' },
+    { key: 'FLAT_VOLUME_FACTOR',    label: 'Envelope space charge', unit: 'x', min: 0.05, max: 1, step: 0.05,
+      help: 'Fraction of its real volume a flat is charged, since mailers squeeze into gaps between boxes.' },
+    { key: 'SIZE_SMALL_MAX',        label: 'Small package limit', unit: 'L', min: 1, max: 60, step: 1,
+      help: 'Upper volume bound for the small category.' },
+    { key: 'SIZE_MEDIUM_MAX',       label: 'Medium package limit', unit: 'L', min: 5, max: 150, step: 5,
+      help: 'Upper volume bound for medium.' },
+    { key: 'SIZE_LARGE_MAX',        label: 'Large package limit', unit: 'L', min: 20, max: 400, step: 10,
+      help: 'Above this a package counts as oversize.' },
+    { key: 'SAME_AREA_BONUS',       label: 'Same ZIP pull',           unit: 'x',    min: 0,  max: 0.95, step: 0.05,
+      help: 'How strongly the solver prefers another stop in the same ZIP.' },
+    { key: 'NEAR_AREA_SECONDS',     label: 'What counts as nearby', unit: 'sec', min: 30, max: 900, step: 30,
+      help: 'A stop within this drive of the last one gets the nearby bonus below. Sets how big "the same area" is.' },
+    { key: 'NEAR_AREA_BONUS',       label: 'Nearby ZIP pull',         unit: 'x',    min: 0,  max: 0.95, step: 0.05,
+      help: 'Preference for a stop in an adjacent area.' },
+    { key: 'PKG_COUNT_BONUS',       label: 'Busy stop bonus',         unit: 'x',    min: 0,  max: 0.5, step: 0.05,
+      help: 'Preference for stops holding more packages.' },
+    { key: 'DIAMETER_GROWTH_PENALTY', label: 'Route-widening penalty', unit: 'x',   min: 0,  max: 8, step: 0.5,
+      help: 'Cost charged when a stop widens the overall route. Higher keeps routes tighter.' },
+    { key: 'TRAFFIC_CITY',          label: 'City traffic multiplier', unit: 'x',    min: 1,  max: 2, step: 0.05,
+      help: 'Multiplier on drive time between stops.' },
+    { key: 'TRAFFIC_HIGHWAY',       label: 'Highway traffic multiplier', unit: 'x', min: 1,  max: 2, step: 0.05,
+      help: 'Multiplier on the drive out from the warehouse.' },
+    { key: 'PACKING_EFFICIENCY',    label: 'Packing efficiency',      unit: 'x',    min: 0.3, max: 1, step: 0.02,
+      help: 'How much of a vehicle\'s cargo space real boxes actually fill.' },
 ];
 
-// Gross zone volume -> usable volume after packing loss
+// --- CONSTANTS ---
+let VAN_CAPACITY = DEFAULTS.VAN_CAPACITY;
+let SECONDS_PER_PKG = DEFAULTS.SECONDS_PER_PKG;      // 3 min per package
+const UNREACHABLE = 99999;
+let TRAFFIC_HIGHWAY = DEFAULTS.TRAFFIC_HIGHWAY;
+let TRAFFIC_CITY = DEFAULTS.TRAFFIC_CITY;
+
+// ---- VEHICLE CAPACITY ----
+// Zone volumes are raw space. Manufacturer trunk figures assume you're pouring
+// liquid in; real boxes leave gaps, which is what PACKING_EFFICIENCY accounts for.
+//
+// maxDimCm is separate and matters just as much: a 142cm package is only 29L,
+// so the volume math says a sedan can take it. It still won't go through the
+// trunk opening. Check both.
+let PACKING_EFFICIENCY = DEFAULTS.PACKING_EFFICIENCY;   // boxes waste ~32% of any space
+
+// Editable, because the right numbers depend on what cars the station actually runs.
+const VEHICLE_DEFAULTS = Object.freeze({
+    SEDAN: { trunk: 425,  rearSeat: 280, frontPassenger: 95, maxDimCm: 120 },
+    SUV:   { trunk: 1000, rearSeat: 350, frontPassenger: 95, maxDimCm: 180 },
+    TRUCK: { trunk: 3000, rearSeat: 400, frontPassenger: 95, maxDimCm: 250 }
+});
+
+const VEHICLE_TIERS = [
+    { id: 'SEDAN', label: 'Sedan',             color: '#4ecdc4',
+      zones: { ...VEHICLE_DEFAULTS.SEDAN }, maxDimCm: VEHICLE_DEFAULTS.SEDAN.maxDimCm },
+    { id: 'SUV',   label: 'SUV',               color: '#fca311',
+      zones: { ...VEHICLE_DEFAULTS.SUV },   maxDimCm: VEHICLE_DEFAULTS.SUV.maxDimCm },
+    { id: 'TRUCK', label: 'Truck / Cargo Van', color: '#f032e6',
+      zones: { ...VEHICLE_DEFAULTS.TRUCK }, maxDimCm: VEHICLE_DEFAULTS.TRUCK.maxDimCm }
+];
+
+// Built from the tiers above so the editor can't drift out of sync with them
+const VEHICLE_SCHEMA = [];
+VEHICLE_TIERS.forEach(t => {
+    const d = VEHICLE_DEFAULTS[t.id];
+    VEHICLE_SCHEMA.push(
+        { key: `veh.${t.id}.trunk`, label: `${t.label} — trunk`, unit: 'L', min: 50, max: 5000, step: 25,
+          def: d.trunk, help: 'Raw trunk or cargo-bay volume before packing loss.' },
+        { key: `veh.${t.id}.rearSeat`, label: `${t.label} — rear seat`, unit: 'L', min: 0, max: 2000, step: 25,
+          def: d.rearSeat, help: 'Usable space on the back seat.' },
+        { key: `veh.${t.id}.frontPassenger`, label: `${t.label} — front seat`, unit: 'L', min: 0, max: 500, step: 5,
+          def: d.frontPassenger, help: 'Usable space on the front passenger seat.' },
+        { key: `veh.${t.id}.maxDimCm`, label: `${t.label} — longest item`, unit: 'cm', min: 40, max: 400, step: 5,
+          def: d.maxDimCm, help: 'Longest single package the loading opening accepts. Independent of volume.' }
+    );
+});
+
+// Raw zone volume minus what packing wastes
 const tierUsableVolume = (tier) => {
     const gross = tier.zones.trunk + tier.zones.rearSeat + tier.zones.frontPassenger;
     return Math.round(gross * PACKING_EFFICIENCY);
 };
 
-const TIER_BY_ID = {};
-VEHICLE_TIERS.forEach(t => {
-    TIER_BY_ID[t.id] = { ...t, usableL: tierUsableVolume(t) };
-});
+let TIER_BY_ID = {};
+const rebuildTiers = () => {
+    TIER_BY_ID = {};
+    VEHICLE_TIERS.forEach(t => {
+        TIER_BY_ID[t.id] = { ...t, usableL: tierUsableVolume(t) };
+    });
+};
+rebuildTiers();
+
+// Takes overrides from the constraint editor. Ignores anything not in DEFAULTS,
+// anything that isn't a number, and clamps the rest to the schema range.
+// Never trust these values, they come straight off the wire.
+const applyConfig = (overrides) => {
+    const applied = {};
+    if (!overrides || typeof overrides !== 'object') return applied;
+
+    const limits = {};
+    CONFIG_SCHEMA.forEach(s => { limits[s.key] = s; });
+
+    Object.keys(overrides).forEach(key => {
+        if (!(key in DEFAULTS)) return;
+        const lim = limits[key];
+        // Toggles come through as booleans, everything else as numbers
+        if (lim && lim.type === 'bool') {
+            applied[key] = !!overrides[key];
+            return;
+        }
+        const raw = Number(overrides[key]);
+        if (!isFinite(raw)) return;
+        const val = lim ? Math.min(lim.max, Math.max(lim.min, raw)) : raw;
+        applied[key] = val;
+    });
+
+    if ('VAN_CAPACITY' in applied) VAN_CAPACITY = applied.VAN_CAPACITY;
+    if ('SECONDS_PER_PKG' in applied) SECONDS_PER_PKG = applied.SECONDS_PER_PKG;
+    if ('TRAFFIC_HIGHWAY' in applied) TRAFFIC_HIGHWAY = applied.TRAFFIC_HIGHWAY;
+    if ('TRAFFIC_CITY' in applied) TRAFFIC_CITY = applied.TRAFFIC_CITY;
+    if ('PACKING_EFFICIENCY' in applied) PACKING_EFFICIENCY = applied.PACKING_EFFICIENCY;
+    if ('BASE_STEM_SECONDS' in applied) BASE_STEM_SECONDS = applied.BASE_STEM_SECONDS;
+    if ('STEM_PER_HOUR' in applied) STEM_PER_HOUR = applied.STEM_PER_HOUR;
+    if ('BASE_MAX_DIAMETER' in applied) BASE_MAX_DIAMETER = applied.BASE_MAX_DIAMETER;
+    if ('DIAMETER_PER_HOUR' in applied) DIAMETER_PER_HOUR = applied.DIAMETER_PER_HOUR;
+    if ('BASE_STEP_LIMIT' in applied) BASE_STEP_LIMIT = applied.BASE_STEP_LIMIT;
+    if ('STEP_PER_HOUR' in applied) STEP_PER_HOUR = applied.STEP_PER_HOUR;
+    if ('SAME_AREA_BONUS' in applied) SAME_AREA_BONUS = applied.SAME_AREA_BONUS;
+    if ('NEAR_AREA_SECONDS' in applied) NEAR_AREA_SECONDS = applied.NEAR_AREA_SECONDS;
+    if ('NEAR_AREA_BONUS' in applied) NEAR_AREA_BONUS = applied.NEAR_AREA_BONUS;
+    if ('PKG_COUNT_BONUS' in applied) PKG_COUNT_BONUS = applied.PKG_COUNT_BONUS;
+    if ('DIAMETER_GROWTH_PENALTY' in applied) DIAMETER_GROWTH_PENALTY = applied.DIAMETER_GROWTH_PENALTY;
+    if ('ABSOLUTE_MAX_STEP' in applied) {
+        ABSOLUTE_MAX_STEP = applied.ABSOLUTE_MAX_STEP;
+        // Keep orphan rescue in step with the gap limit unless it was set on
+        // its own, otherwise orphans quietly reintroduce the sprawl you just
+        // tightened away.
+        if (!('ORPHAN_MAX_ATTACH' in applied)) ORPHAN_MAX_ATTACH = ABSOLUTE_MAX_STEP;
+    }
+    if ('ORPHAN_MAX_ATTACH' in applied) ORPHAN_MAX_ATTACH = applied.ORPHAN_MAX_ATTACH;
+    if ('SANITY_MAX_DIAMETER' in applied) SANITY_MAX_DIAMETER = applied.SANITY_MAX_DIAMETER;
+    if ('MAX_LOCAL_DRIVE_SHARE' in applied) MAX_LOCAL_DRIVE_SHARE = applied.MAX_LOCAL_DRIVE_SHARE;
+    if ('TIE_TOLERANCE_SECONDS' in applied) TIE_TOLERANCE_SECONDS = applied.TIE_TOLERANCE_SECONDS;
+    if ('COST_PER_MILE' in applied) COST_PER_MILE = applied.COST_PER_MILE;
+    if ('MPG_SEDAN' in applied) MPG_SEDAN = applied.MPG_SEDAN;
+    if ('MPG_SUV' in applied) MPG_SUV = applied.MPG_SUV;
+    if ('MPG_TRUCK' in applied) MPG_TRUCK = applied.MPG_TRUCK;
+    if ('FUEL_PRICE_PER_GAL' in applied) FUEL_PRICE_PER_GAL = applied.FUEL_PRICE_PER_GAL;
+    if ('REMOTE_ISOLATION_SECONDS' in applied) REMOTE_ISOLATION_SECONDS = applied.REMOTE_ISOLATION_SECONDS;
+    if ('REMOTE_STEM_SECONDS' in applied) REMOTE_STEM_SECONDS = applied.REMOTE_STEM_SECONDS;
+    if ('FAIR_SHARE_SLACK' in applied) FAIR_SHARE_SLACK = applied.FAIR_SHARE_SLACK;
+    if ('SEED_PACKAGE_WEIGHT' in applied) SEED_PACKAGE_WEIGHT = applied.SEED_PACKAGE_WEIGHT;
+    if ('SEED_NEARBY_WEIGHT' in applied) SEED_NEARBY_WEIGHT = applied.SEED_NEARBY_WEIGHT;
+    if ('SEED_STEM_WEIGHT' in applied) SEED_STEM_WEIGHT = applied.SEED_STEM_WEIGHT;
+    if ('SEED_SPREAD_WEIGHT' in applied) SEED_SPREAD_WEIGHT = applied.SEED_SPREAD_WEIGHT;
+
+    if ('FLAT_MAX_MIN_DIM_CM' in applied) FLAT_MAX_MIN_DIM_CM = applied.FLAT_MAX_MIN_DIM_CM;
+    if ('FLAT_MAX_VOLUME_L' in applied) FLAT_MAX_VOLUME_L = applied.FLAT_MAX_VOLUME_L;
+    if ('FLAT_VOLUME_FACTOR' in applied) FLAT_VOLUME_FACTOR = applied.FLAT_VOLUME_FACTOR;
+    if ('SIZE_SMALL_MAX' in applied) SIZE_SMALL_MAX = applied.SIZE_SMALL_MAX;
+    if ('SIZE_MEDIUM_MAX' in applied) SIZE_MEDIUM_MAX = applied.SIZE_MEDIUM_MAX;
+    if ('SIZE_LARGE_MAX' in applied) SIZE_LARGE_MAX = applied.SIZE_LARGE_MAX;
+
+    let relaxChanged = false;
+    if ('RELAX_DIAMETER_STEP' in applied) { RELAX_DIAMETER_STEP = applied.RELAX_DIAMETER_STEP; relaxChanged = true; }
+    if ('RELAX_STEP_STEP' in applied) { RELAX_STEP_STEP = applied.RELAX_STEP_STEP; relaxChanged = true; }
+    if (relaxChanged) rebuildRelaxation();
+
+    // Vehicle keys look like "veh.SEDAN.trunk", handled separately from the scalars
+    const vehLimits = {};
+    VEHICLE_SCHEMA.forEach(s => { vehLimits[s.key] = s; });
+    let vehChanged = false;
+    Object.keys(overrides).forEach(key => {
+        if (!key.startsWith('veh.')) return;
+        const lim = vehLimits[key];
+        if (!lim) return;
+        const raw = Number(overrides[key]);
+        if (!isFinite(raw)) return;
+        const val = Math.min(lim.max, Math.max(lim.min, raw));
+        const [, tierId, field] = key.split('.');
+        const tier = VEHICLE_TIERS.find(t => t.id === tierId);
+        if (!tier) return;
+        if (field === 'maxDimCm') tier.maxDimCm = val;
+        else tier.zones[field] = val;
+        applied[key] = val;
+        vehChanged = true;
+    });
+
+    if ('PACKING_EFFICIENCY' in applied || vehChanged) rebuildTiers();
+    return applied;
+};
+
+const resetConfig = () => {
+    VAN_CAPACITY = DEFAULTS.VAN_CAPACITY;
+    SECONDS_PER_PKG = DEFAULTS.SECONDS_PER_PKG;
+    TRAFFIC_HIGHWAY = DEFAULTS.TRAFFIC_HIGHWAY;
+    TRAFFIC_CITY = DEFAULTS.TRAFFIC_CITY;
+    PACKING_EFFICIENCY = DEFAULTS.PACKING_EFFICIENCY;
+    BASE_STEM_SECONDS = DEFAULTS.BASE_STEM_SECONDS;
+    STEM_PER_HOUR = DEFAULTS.STEM_PER_HOUR;
+    BASE_MAX_DIAMETER = DEFAULTS.BASE_MAX_DIAMETER;
+    DIAMETER_PER_HOUR = DEFAULTS.DIAMETER_PER_HOUR;
+    BASE_STEP_LIMIT = DEFAULTS.BASE_STEP_LIMIT;
+    STEP_PER_HOUR = DEFAULTS.STEP_PER_HOUR;
+    SAME_AREA_BONUS = DEFAULTS.SAME_AREA_BONUS;
+    NEAR_AREA_SECONDS = DEFAULTS.NEAR_AREA_SECONDS;
+    NEAR_AREA_BONUS = DEFAULTS.NEAR_AREA_BONUS;
+    PKG_COUNT_BONUS = DEFAULTS.PKG_COUNT_BONUS;
+    DIAMETER_GROWTH_PENALTY = DEFAULTS.DIAMETER_GROWTH_PENALTY;
+    ABSOLUTE_MAX_STEP = DEFAULTS.ABSOLUTE_MAX_STEP;
+    ORPHAN_MAX_ATTACH = DEFAULTS.ORPHAN_MAX_ATTACH;
+    SANITY_MAX_DIAMETER = DEFAULTS.SANITY_MAX_DIAMETER;
+    MAX_LOCAL_DRIVE_SHARE = DEFAULTS.MAX_LOCAL_DRIVE_SHARE;
+    TIE_TOLERANCE_SECONDS = DEFAULTS.TIE_TOLERANCE_SECONDS;
+    COST_PER_MILE = DEFAULTS.COST_PER_MILE;
+    MPG_SEDAN = DEFAULTS.MPG_SEDAN;
+    MPG_SUV = DEFAULTS.MPG_SUV;
+    MPG_TRUCK = DEFAULTS.MPG_TRUCK;
+    FUEL_PRICE_PER_GAL = DEFAULTS.FUEL_PRICE_PER_GAL;
+    REMOTE_ISOLATION_SECONDS = DEFAULTS.REMOTE_ISOLATION_SECONDS;
+    REMOTE_STEM_SECONDS = DEFAULTS.REMOTE_STEM_SECONDS;
+    FAIR_SHARE_SLACK = DEFAULTS.FAIR_SHARE_SLACK;
+    SEED_PACKAGE_WEIGHT = DEFAULTS.SEED_PACKAGE_WEIGHT;
+    SEED_NEARBY_WEIGHT = DEFAULTS.SEED_NEARBY_WEIGHT;
+    SEED_STEM_WEIGHT = DEFAULTS.SEED_STEM_WEIGHT;
+    SEED_SPREAD_WEIGHT = DEFAULTS.SEED_SPREAD_WEIGHT;
+    FLAT_MAX_MIN_DIM_CM = DEFAULTS.FLAT_MAX_MIN_DIM_CM;
+    FLAT_MAX_VOLUME_L = DEFAULTS.FLAT_MAX_VOLUME_L;
+    FLAT_VOLUME_FACTOR = DEFAULTS.FLAT_VOLUME_FACTOR;
+    SIZE_SMALL_MAX = DEFAULTS.SIZE_SMALL_MAX;
+    SIZE_MEDIUM_MAX = DEFAULTS.SIZE_MEDIUM_MAX;
+    SIZE_LARGE_MAX = DEFAULTS.SIZE_LARGE_MAX;
+    RELAX_DIAMETER_STEP = DEFAULTS.RELAX_DIAMETER_STEP;
+    RELAX_STEP_STEP = DEFAULTS.RELAX_STEP_STEP;
+    rebuildRelaxation();
+
+    VEHICLE_TIERS.forEach(t => {
+        const d = VEHICLE_DEFAULTS[t.id];
+        t.zones.trunk = d.trunk;
+        t.zones.rearSeat = d.rearSeat;
+        t.zones.frontPassenger = d.frontPassenger;
+        t.maxDimCm = d.maxDimCm;
+    });
+    rebuildTiers();
+};
 
 const LARGEST_TIER = 'TRUCK';
 
-// Flat / envelope packages compress into gaps between boxes.
-// They are charged a fraction of their cubic instead of the full amount.
-const FLAT_MAX_MIN_DIM_CM = 6;     // thickness at or under this = flat
-const FLAT_MAX_VOLUME_L   = 6;     // and no bigger than this
-const FLAT_VOLUME_FACTOR  = 0.25;  // charged at 25% of cubic
+// Envelopes squash into the gaps between boxes, so charging them their full
+// cubic would badly overstate how much room they take.
+let FLAT_MAX_MIN_DIM_CM = DEFAULTS.FLAT_MAX_MIN_DIM_CM;     // thickness at or under this = flat
+let FLAT_MAX_VOLUME_L   = DEFAULTS.FLAT_MAX_VOLUME_L;     // and no bigger than this
+let FLAT_VOLUME_FACTOR  = DEFAULTS.FLAT_VOLUME_FACTOR;  // charged at 25% of cubic
 
-// Package size categories (by full cubic, in litres)
-const SIZE_SMALL_MAX  = 15;
-const SIZE_MEDIUM_MAX = 50;
-const SIZE_LARGE_MAX  = 120;
+// Size buckets, by full cubic volume in litres
+let SIZE_SMALL_MAX  = DEFAULTS.SIZE_SMALL_MAX;
+let SIZE_MEDIUM_MAX = DEFAULTS.SIZE_MEDIUM_MAX;
+let SIZE_LARGE_MAX  = DEFAULTS.SIZE_LARGE_MAX;
 
-// Compute effective (space-consuming) volume for one package.
-// Accepts dims in cm; returns litres.
+// How much space one package actually eats. Dims in cm, answer in litres.
 const packageVolume = (lengthCm, widthCm, heightCm) => {
     const L = parseFloat(lengthCm), W = parseFloat(widthCm), H = parseFloat(heightCm);
     if (!isFinite(L) || !isFinite(W) || !isFinite(H) || L <= 0 || W <= 0 || H <= 0) {
@@ -277,7 +582,7 @@ const packageVolume = (lengthCm, widthCm, heightCm) => {
     };
 };
 
-// Smallest tier that can carry this load. Returns null if nothing fits.
+// Smallest vehicle that can take this load. null means nothing in the fleet can.
 const classifyVehicle = (volumeL, maxDimCm) => {
     for (const tier of VEHICLE_TIERS) {
         const t = TIER_BY_ID[tier.id];
@@ -291,33 +596,46 @@ const tierCapacity = (tierId) => {
     return { usableL: t.usableL, maxDimCm: t.maxDimCm };
 };
 
-// --- TUNING (Calibrated for PA warehouse @ Collegeville) ---
-const BASE_STEM_SECONDS = 1800;    // 30 min stem for 2h driver
-const STEM_PER_HOUR = 900;         // +15 min per extra hour over 2h
+// --- Tuned against the Collegeville PA warehouse ---
+let BASE_STEM_SECONDS = DEFAULTS.BASE_STEM_SECONDS;    // 30 min stem for 2h driver
+let STEM_PER_HOUR = DEFAULTS.STEM_PER_HOUR;         // +15 min per extra hour over 2h
 
-// Per-hour scaling was too aggressive: a 4h driver got double the 2h base and
-// then the same relaxation multiplier on top, ending up with roughly 6x the
-// 2h limit. 2h routes behaved well, 4h routes sprawled. Gentler now.
-const BASE_MAX_DIAMETER = 600;     // 10 min diameter for 2h driver
-const DIAMETER_PER_HOUR = 180;     // +3 min per extra hour (was 5)
+// These used to scale much harder per hour. Combined with the old multiplying
+// relaxation, a 4h driver ended up allowed roughly 6x what a 2h driver got,
+// which is exactly why 2h routes looked fine and 4h ones sprawled.
+let BASE_MAX_DIAMETER = DEFAULTS.BASE_MAX_DIAMETER;     // 10 min diameter for 2h driver
+let DIAMETER_PER_HOUR = DEFAULTS.DIAMETER_PER_HOUR;     // +3 min per extra hour (was 5)
 
-const BASE_STEP_LIMIT = 360;       // 6 min step for 2h driver
-const STEP_PER_HOUR = 90;          // +1.5 min per extra hour (was 3)
+let BASE_STEP_LIMIT = DEFAULTS.BASE_STEP_LIMIT;       // 6 min step for 2h driver
+let STEP_PER_HOUR = DEFAULTS.STEP_PER_HOUR;          // +1.5 min per extra hour (was 3)
 
-const SAME_AREA_BONUS = 0.75;      // Very strong pull for the same ZIP
-const NEAR_AREA_SECONDS = 180;     // stops within 3 min count as "same area"
-const NEAR_AREA_BONUS = 0.40;      // strong pull for an adjacent ZIP
-const PKG_COUNT_BONUS = 0.20;      // 20% bonus per package
-const DIAMETER_GROWTH_PENALTY = 2.0; // cost per second a stop widens the route
+let SAME_AREA_BONUS = DEFAULTS.SAME_AREA_BONUS;      // Very strong pull for the same ZIP
+let NEAR_AREA_SECONDS = DEFAULTS.NEAR_AREA_SECONDS;     // stops within 3 min count as "same area"
+let NEAR_AREA_BONUS = DEFAULTS.NEAR_AREA_BONUS;      // strong pull for an adjacent ZIP
+let PKG_COUNT_BONUS = DEFAULTS.PKG_COUNT_BONUS;      // 20% bonus per package
+let DIAMETER_GROWTH_PENALTY = DEFAULTS.DIAMETER_GROWTH_PENALTY; // cost per second a stop widens the route
 
 // Relaxation tiers: progressively widen diameter/step when tight
 // constraints can't find candidates. Time budget is always the hard ceiling.
-// Relaxation is ADDITIVE, not multiplicative. Multiplying compounded with the
-// per-hour scaling, so long blocks blew up while short blocks stayed sane.
-// Each tier now adds the same fixed amount of slack regardless of block length.
-const RELAXATION_DIAMETER_ADD = [0, 300, 600, 900];   // +0/5/10/15 min
-const RELAXATION_STEP_ADD     = [0, 150, 300, 450];   // +0/2.5/5/7.5 min
-const RELAXATION_TIERS = RELAXATION_DIAMETER_ADD;      // tier count
+// Relaxation adds a fixed amount per tier instead of multiplying. Multiplying
+// compounded with the per-hour scaling above and blew up long blocks.
+// Tier N gets N steps of slack. Change the step size and the ladder rebuilds.
+let RELAX_DIAMETER_STEP = DEFAULTS.RELAX_DIAMETER_STEP;
+let RELAX_STEP_STEP = DEFAULTS.RELAX_STEP_STEP;
+const RELAXATION_TIER_COUNT = 4;
+let RELAXATION_DIAMETER_ADD = [];
+let RELAXATION_STEP_ADD = [];
+let RELAXATION_TIERS = [];
+
+const rebuildRelaxation = () => {
+    RELAXATION_DIAMETER_ADD = [];
+    RELAXATION_STEP_ADD = [];
+    for (let i = 0; i < RELAXATION_TIER_COUNT; i++) {
+        RELAXATION_DIAMETER_ADD.push(i * RELAX_DIAMETER_STEP);
+        RELAXATION_STEP_ADD.push(i * RELAX_STEP_STEP);
+    }
+    RELAXATION_TIERS = RELAXATION_DIAMETER_ADD;
+};
 
 // =====================================================
 // ABSOLUTE GEOGRAPHIC CEILINGS
@@ -330,29 +648,50 @@ const RELAXATION_TIERS = RELAXATION_DIAMETER_ADD;      // tier count
 // An unassigned package is a better outcome than a driver spending the block
 // driving between distant stops instead of delivering.
 // =====================================================
-// A single leg longer than this between two consecutive stops is sprawl no
-// matter how much time the block has left. This is the one hard geographic
-// ceiling; route diameter is governed by the drive-share rule below instead.
-const ABSOLUTE_MAX_STEP = 900;        // 15 min between consecutive stops
-const SANITY_MAX_DIAMETER = 2400;     // 40 min end-to-end, backstop only
-const ORPHAN_MAX_ATTACH = 900;        // 15 min from an existing route stop
-
-// =====================================================
-// DRIVE-SHARE RULE  (the real fix for long blocks)
+// One hard geographic ceiling. A gap this big between consecutive stops is
+// sprawl whatever the clock says. Route width is handled by drive share below.
+let ABSOLUTE_MAX_STEP = DEFAULTS.ABSOLUTE_MAX_STEP;        // 15 min between consecutive stops
+let SANITY_MAX_DIAMETER = DEFAULTS.SANITY_MAX_DIAMETER;     // 40 min end-to-end, backstop only
+// How far an orphan may sit from the route it gets bolted onto.
 //
-// Time budget alone stopped constraining anything on sparse manifests: with
-// few packages, service time is small, so a 4h budget happily permitted 3h of
-// driving. That is how a driver got cooked.
-//
-// Stem (warehouse -> first stop) is EXCLUDED. It is paid once, and a long
-// drive out to a tight cluster is fine. What is capped is local driving --
-// the legs between stops, paid all day long.
-// =====================================================
-const MAX_LOCAL_DRIVE_SHARE = 0.55;   // local driving <= 55% of post-stem time
+// This was a hardcoded 900 while the max-gap slider moved independently, so
+// tightening the gap changed the auction but not orphan rescue. You'd end up
+// with a route that broke your own limit and a safety warning explaining it.
+// Tracks the max gap now unless it's overridden on its own.
+let ORPHAN_MAX_ATTACH = DEFAULTS.ORPHAN_MAX_ATTACH;
 
-// Two drivers this close to a package count as equally close, so the
-// less-loaded one takes it. Beyond this gap, closeness wins outright.
-const TIE_TOLERANCE_SECONDS = 180;    // 3 min
+// ---- DRIVE SHARE ----
+// This is what actually fixed the long blocks. The time budget on its own
+// stopped constraining anything when packages were spread thin: few packages
+// means little service time, so a 4h budget would happily allow 3h of driving.
+//
+// The drive out to the first stop doesn't count here. You pay it once, and a
+// long run to a tight cluster is a perfectly good route. What's capped is the
+// driving between stops, which you pay all day.
+let MAX_LOCAL_DRIVE_SHARE = DEFAULTS.MAX_LOCAL_DRIVE_SHARE;   // local driving <= 55% of post-stem time
+
+// ---- SEED SCORING ----
+// Seeds are picked on how much work is sitting there, not how close it is.
+// A cluster of six 40 minutes out is a better start than one package round the
+// corner, because the drive out is paid once and delivering is the whole job.
+let COST_PER_MILE = DEFAULTS.COST_PER_MILE;
+let MPG_SEDAN = DEFAULTS.MPG_SEDAN;
+let MPG_SUV = DEFAULTS.MPG_SUV;
+let MPG_TRUCK = DEFAULTS.MPG_TRUCK;
+let FUEL_PRICE_PER_GAL = DEFAULTS.FUEL_PRICE_PER_GAL;
+let REMOTE_ISOLATION_SECONDS = DEFAULTS.REMOTE_ISOLATION_SECONDS;  // nothing within this = isolated
+let REMOTE_STEM_SECONDS = DEFAULTS.REMOTE_STEM_SECONDS;   // further than this from base = far out
+let FAIR_SHARE_SLACK    = DEFAULTS.FAIR_SHARE_SLACK;      // headroom over an even split
+let SEED_PACKAGE_WEIGHT = DEFAULTS.SEED_PACKAGE_WEIGHT;   // per package at the seed
+let SEED_NEARBY_WEIGHT  = DEFAULTS.SEED_NEARBY_WEIGHT;    // per package near it
+let SEED_STEM_WEIGHT    = DEFAULTS.SEED_STEM_WEIGHT;      // per second of drive out
+let SEED_SPREAD_WEIGHT  = DEFAULTS.SEED_SPREAD_WEIGHT;    // per second from other seeds
+
+// Inside this gap two drivers count as equally close and the emptier one wins.
+// Outside it, distance decides and balance doesn't get a vote.
+let TIE_TOLERANCE_SECONDS = DEFAULTS.TIE_TOLERANCE_SECONDS;    // 3 min
+
+rebuildRelaxation();
 
 const getConstraints = (hours, tier = 0) => {
     const extraHours = Math.max(0, hours - 2);
@@ -365,8 +704,7 @@ const getConstraints = (hours, tier = 0) => {
     };
 };
 
-// Would this driver still be delivering rather than driving after adding
-// `addedDrive` seconds of local driving?
+// Would this driver still be mostly delivering after taking on addedDrive?
 const withinDriveShare = (driver, addedDrive) => {
     const stem = driver.stemTime || 0;
     const available = driver.timeBudget - stem;
@@ -375,10 +713,11 @@ const withinDriveShare = (driver, addedDrive) => {
     return localDrive <= available * MAX_LOCAL_DRIVE_SHARE;
 };
 
-// Scores a candidate stop for a driver. Lower is better.
-// Distance from the last stop is only part of it: a stop that widens the
-// route's overall span is penalised even when it sits next to the last stop,
-// because span is what makes a driver spend the block driving.
+// Scores a candidate stop. Lower is better.
+//
+// Distance from the last stop isn't enough on its own. A stop can sit right
+// next to where the driver already is and still stretch the route's overall
+// span, and span is what eats the block. So growth gets penalised too.
 const compactnessScore = (driver, pkg, distFromLast, matrix) => {
     let currentMax = 0, newMax = 0;
     for (const idx of driver.assignedIndices) {
@@ -403,7 +742,7 @@ const compactnessScore = (driver, pkg, distFromLast, matrix) => {
     return score;
 };
 
-// Widest gap between any two stops on a route -- the compactness metric.
+// Widest gap between any two stops. This is the compactness number.
 const routeDiameter = (route, matrix) => {
     let max = 0;
     for (let i = 0; i < route.length; i++) {
@@ -415,19 +754,14 @@ const routeDiameter = (route, matrix) => {
     return max;
 };
 
-// =====================================================
-// V12: TERRITORIAL ROUTING
+// ---- TERRITORIAL ROUTING ----
+// Every package goes to whichever driver's route is already closest to it.
+// That's what stops routes crossing over each other.
 //
-// Key principle: each package goes to the driver whose
-// existing route is GEOGRAPHICALLY CLOSEST. This prevents
-// routes from crossing each other.
-//
-// - Progressive relaxation tiers for both auto & manual
-// - Time budget is always the hard ceiling
-// - Orphan rescue uses closest-route, not random
-// =====================================================
+// Relaxation tiers apply in both auto and manual. The time budget is always
+// the hard ceiling. Orphans go to the closest route, never to whoever's free.
 
-// Helper: minimum distance from a package to any stop in a driver's route
+// Closest this package gets to anything already on the driver's route
 const minDistToRoute = (pkgIdx, route, matrix) => {
     let minD = UNREACHABLE;
     for (const stop of route) {
@@ -437,7 +771,7 @@ const minDistToRoute = (pkgIdx, route, matrix) => {
     return minD;
 };
 
-// Helper: finalize a driver's route (add warehouse, 2-opt, compute hours)
+// Wrap up a route: prepend the warehouse, run 2-opt, work out the numbers
 const finalizeRoute = (driver, startPoint, matrix) => {
     const routeWithWarehouse = [{
         ...startPoint, matrix_index: 0, tbas: ['WAREHOUSE'],
@@ -454,7 +788,7 @@ const finalizeRoute = (driver, startPoint, matrix) => {
     const finalService = driver.currentPackages * SECONDS_PER_PKG;
     const totalHours = (finalDrive + finalService) / 3600;
 
-    // Cumulative per-stop ETA (seconds from warehouse departure)
+    // Running ETA per stop, seconds since leaving the warehouse
     let elapsed = 0;
     optimized.forEach((stop, i) => {
         if (i > 0) {
@@ -466,6 +800,7 @@ const finalizeRoute = (driver, startPoint, matrix) => {
     });
 
     const diameterSec = routeDiameter(driver.route, matrix);
+    const metrics = computeMetrics(optimized, matrix);
     const totalVolumeL = +(driver.currentVolume || 0).toFixed(1);
     const maxDimCm = driver.currentMaxDim || 0;
     const requiredVehicle = classifyVehicle(totalVolumeL, maxDimCm);
@@ -478,6 +813,7 @@ const finalizeRoute = (driver, startPoint, matrix) => {
         totalVolumeL,
         maxDimCm,
         diameterMin: Math.round(diameterSec / 60),
+        metrics,
         requiredVehicle: requiredVehicle || 'UNFITTABLE',
         assignedVehicle: driver.vehicle || null,
         vehicleUsagePct: driver.vehicle && TIER_BY_ID[driver.vehicle]
@@ -486,11 +822,11 @@ const finalizeRoute = (driver, startPoint, matrix) => {
     };
 };
 
-// Helper: recalculate a driver's time from scratch based on their route
-// If optimize=true, also runs 2-opt to fix stop ordering (use after merges)
+// Recalculate a driver's totals from their route. Pass optimize=true after a
+// merge or a swap, when the stop order is likely to have gone messy.
 const recalcDriverTime = (driver, matrix, optimize = false) => {
     if (optimize && driver.route.length >= 3) {
-        // Insert temporary warehouse, run 2-opt, strip warehouse
+        // 2-opt needs the warehouse in place to order things properly
         const warehouseStop = { matrix_index: 0, tbas: ['_WH_'] };
         const tempRoute = [warehouseStop, ...driver.route];
         const optimized = optimizeRouteWith2Opt([...tempRoute], matrix);
@@ -535,10 +871,11 @@ const recalcDriverTime = (driver, matrix, optimize = false) => {
     driver.assignedIndices = indices;
 };
 
-// Can this driver physically accept this stop?
-// enforceShare=true applies the driver's fair slice of the total cubic so one
-// driver cannot swallow the whole manifest's volume while others sit empty.
-// enforceShare=false falls back to the raw vehicle limit (second pass).
+// Can this driver physically take this stop?
+//
+// enforceShare caps them at their fair slice of the total cubic, which stops
+// the first bidder swallowing the manifest while everyone else sits empty.
+// Pass false on the second pass, when the only thing that matters is real limits.
 const fitsVehicle = (driver, stop, enforceShare = true) => {
     if (driver.currentPackages + stop.tbas.length > VAN_CAPACITY) return false;
     const cap = tierCapacity(driver.vehicle || LARGEST_TIER);
@@ -551,7 +888,7 @@ const fitsVehicle = (driver, stop, enforceShare = true) => {
     return true;
 };
 
-// Apply a stop to a driver's running totals.
+// Add a stop and update the running totals
 const applyStop = (driver, stop, addedDrive, addedService) => {
     driver.route.push(stop);
     driver.assignedIndices.add(stop.matrix_index);
@@ -562,17 +899,13 @@ const applyStop = (driver, stop, addedDrive, addedService) => {
     driver.currentServiceTime += addedService;
 };
 
-// =====================================================
-// POST-PROCESSING: Merge close routes (auto mode only)
-//
-// After sequential route building, some routes end up
-// geographically close but split across drivers.
-// This merges them if combined they fit in one driver.
-// =====================================================
+// ---- MERGE ----
+// Building routes one at a time sometimes leaves two sitting on top of each
+// other. If the combined load fits one driver, merge them.
 const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
     const timeBudget = maxHours * 3600;
     const constraints = getConstraints(maxHours);
-    // Hard cap: only merge routes whose avg pairwise distance is within diameter
+    // Don't merge routes that aren't genuinely near each other
     const MERGE_MAX_AVG_DIST = constraints.maxDiameter;
     let merged = true;
     
@@ -598,7 +931,7 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
                 if (combinedVol > mergeCap.usableL) continue;
                 if (combinedMaxDim > mergeCap.maxDimCm) continue;
                 
-                // AVERAGE pairwise distance between all stops in both routes
+                // Average distance between every pair of stops across both routes
                 let totalDist = 0;
                 let pairs = 0;
                 for (const stopA of driverObjects[i].route) {
@@ -614,13 +947,13 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
                 // Only merge if routes are genuinely close on average
                 if (avgDist > MERGE_MAX_AVG_DIST || avgDist >= UNREACHABLE) continue;
                 
-                // Quick feasibility: combined service + larger stem + avg inter-route gap
+                // Rough check before doing the expensive part
                 const combinedService = combinedPkgs * SECONDS_PER_PKG;
                 const stemI = driverObjects[i].currentDriveTime;
                 const stemJ = driverObjects[j].currentDriveTime;
                 const roughDrive = Math.max(stemI, stemJ) + avgDist;
                 
-                // Use 0.85x — 2-opt will optimize significantly
+                // 0.85x because 2-opt will claw back a good chunk of this
                 if ((roughDrive * 0.85) + combinedService > timeBudget) continue;
                 
                 if (avgDist < bestAvgDist) {
@@ -630,7 +963,7 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
             }
             
             if (bestMerge !== null) {
-                // Save state for potential undo
+                // Keep the old routes in case the merge turns out not to fit
                 const savedRouteI = [...driverObjects[i].route];
                 const savedRouteJ = [...driverObjects[bestMerge].route];
                 
@@ -642,7 +975,7 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
                 recalcDriverTime(driverObjects[i], matrix, true);
                 recalcDriverTime(driverObjects[bestMerge], matrix);
                 
-                // Verify the optimized route actually fits
+                // Now check the real number, not the estimate
                 const totalTime = driverObjects[i].currentDriveTime + driverObjects[i].currentServiceTime;
                 if (totalTime > timeBudget) {
                     // Undo: restore both routes
@@ -651,7 +984,7 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
                     driverObjects[bestMerge].route = savedRouteJ;
                     recalcDriverTime(driverObjects[i], matrix);
                     recalcDriverTime(driverObjects[bestMerge], matrix);
-                    // Don't set merged=true — skip this pair
+                    // Don't set merged=true, skip this pair
                 } else {
                     merged = true;
                     console.log(`[MERGE] Merged routes -> ${driverObjects[i].currentPackages} pkgs, ${Math.round(totalTime/60)}min`);
@@ -665,15 +998,10 @@ const mergeCloseRoutes = (driverObjects, matrix, maxHours) => {
     return driverObjects.filter(d => d.route.length > 0);
 };
 
-// =====================================================
-// POST-PROCESSING: Swap-optimize stop assignments
-//
-// For each stop in each route, check if moving it to
-// another driver whose route is closer would be better.
-// Only move if: fits capacity, fits time, AND reduces
-// total inter-stop distance. Runs multiple passes until
-// no more beneficial swaps exist.
-// =====================================================
+// ---- SWAP ----
+// Walk every stop and check whether some other driver's route is closer to it.
+// Only moves if it fits on capacity and time AND cuts total distance.
+// Keeps going until a pass makes no changes.
 const swapOptimize = (driverObjects, matrix, label = '') => {
     let totalSwaps = 0;
     let pass = 0;
@@ -777,8 +1105,275 @@ const swapOptimize = (driverObjects, matrix, label = '') => {
     return driverObjects.filter(d => d.route.length > 0);
 };
 
-// Explain why each leftover stop could not be placed. The overflow panel
-// is useless without this -- "unassigned" alone tells a dispatcher nothing.
+// ---- METRICS ----
+// What this app decides is assignment: which stops go together and who takes
+// them. Sequencing happens in the Flex app on the driver's phone, so we don't
+// claim credit for it. Routes still get 2-opt'd here, otherwise the drive
+// times, ETAs and constraint checks would all be wrong.
+const routeDriveTime = (orderedStops, matrix) => {
+    let drive = 0;
+    let prev = 0;
+    orderedStops.forEach((stop, i) => {
+        const leg = matrix[prev][stop.matrix_index];
+        if (leg < UNREACHABLE) drive += (i === 0) ? leg * TRAFFIC_HIGHWAY : leg * TRAFFIC_CITY;
+        prev = stop.matrix_index;
+    });
+    return drive;
+};
+
+// Road distance for a finished route, using the distance matrix rather than
+// straight lines, so mileage matches what the driver's odometer will show.
+// Road distance for a route: warehouse out to the first stop, then stop to
+// stop. Ends at the last delivery, same as the block does.
+const routeDistanceMeters = (orderedStops, distMatrix) => {
+    if (!distMatrix) return 0;
+    let total = 0;
+    let prev = 0;
+    orderedStops.forEach(stop => {
+        const leg = distMatrix[prev][stop.matrix_index];
+        if (leg < UNREACHABLE) total += leg;
+        prev = stop.matrix_index;
+    });
+    return total;
+};
+
+// Drive time for one finished route. Summed for the fleet total.
+const computeMetrics = (finalStops, matrix) => {
+    const real = finalStops.filter(s => !s.isWarehouse);
+    if (real.length === 0) return { optimizedDriveSec: 0 };
+    return { optimizedDriveSec: Math.round(routeDriveTime(real, matrix)) };
+};
+
+// What you'd get with no software: manifest top to bottom, dealt into equal
+// piles. Each pile gets 2-opt'd like a real route would, since the Flex app
+// sequences it either way. That takes ordering out of the comparison and
+// leaves only the part this app is responsible for.
+//
+// Worth knowing: manifests usually arrive ZIP-sorted, and ZIPs are roughly
+// geographic, so these piles come out better than you'd expect. The gap shows
+// up in the constraint violations, not the drive time.
+const naivePlanDriveTime = (allStops, driverList, matrix) => {
+    const stops = allStops.filter(s => !s.isWarehouse);
+    const driverCount = driverList.length;
+    if (stops.length === 0 || driverCount < 1) {
+        return { driveSec: 0, chunks: 0, violations: 0, breakdown: {} };
+    }
+
+    const ordered = [...stops].sort((a, b) => a.matrix_index - b.matrix_index);
+    const perDriver = Math.ceil(ordered.length / driverCount);
+
+    let total = 0, chunks = 0, violations = 0;
+    const breakdown = { overTime: 0, overVolume: 0, overPackages: 0, itemTooLong: 0, longLeg: 0 };
+
+    for (let i = 0; i < ordered.length; i += perDriver) {
+        const chunk = ordered.slice(i, i + perDriver);
+        if (chunk.length === 0) continue;
+        const driver = driverList[chunks] || driverList[driverList.length - 1];
+        chunks++;
+
+        const withWh = [{ matrix_index: 0, tbas: ['_WH_'] }, ...chunk];
+        const seq = chunk.length >= 3
+            ? optimizeRouteWith2Opt([...withWh], matrix).filter(s => s.tbas[0] !== '_WH_')
+            : chunk;
+
+        const drive = routeDriveTime(seq, matrix);
+        total += drive;
+
+        // Could you actually send this pile out? The split ignores every
+        // constraint, and this is where that shows.
+        const pkgs = chunk.reduce((a, s) => a + s.tbas.length, 0);
+        const vol = chunk.reduce((a, s) => a + (s.volumeL || 0), 0);
+        const maxDim = chunk.reduce((m, s) => Math.max(m, s.maxDimCm || 0), 0);
+        const cap = tierCapacity(driver.vehicle || LARGEST_TIER);
+        const hours = (drive + pkgs * SECONDS_PER_PKG) / 3600;
+
+        if (hours > driver.maxHours) { breakdown.overTime++; violations++; }
+        if (vol > cap.usableL) { breakdown.overVolume++; violations++; }
+        if (pkgs > VAN_CAPACITY) { breakdown.overPackages++; violations++; }
+        if (maxDim > cap.maxDimCm) { breakdown.itemTooLong++; violations++; }
+
+        let worstLeg = 0;
+        for (let k = 1; k < seq.length; k++) {
+            const leg = matrix[seq[k - 1].matrix_index][seq[k].matrix_index];
+            if (leg < UNREACHABLE && leg > worstLeg) worstLeg = leg;
+        }
+        if (worstLeg > ABSOLUTE_MAX_STEP) { breakdown.longLeg++; violations++; }
+    }
+    return { driveSec: Math.round(total), chunks, violations, breakdown };
+};
+
+// ---- SAFETY CHECKS ----
+// Planning won't break these rules on its own. A manual package move will.
+// Every route gets checked on the way out so problems turn up before dispatch
+// rather than in a parking lot.
+const validateRoute = (result, matrix) => {
+    const issues = [];
+    if (result.isOverflow) return issues;
+
+    const stops = result.route.filter(s => !s.isWarehouse);
+    if (stops.length === 0) return issues;
+
+    const vehicle = result.assignedVehicle || LARGEST_TIER;
+    const cap = tierCapacity(vehicle);
+    const label = TIER_BY_ID[vehicle] ? TIER_BY_ID[vehicle].label : vehicle;
+    const packages = stops.reduce((a, s) => a + s.tbas.length, 0);
+
+    // 1. Over the block length
+    if (result.totalHours > result.driverMax) {
+        const over = Math.round((result.totalHours - result.driverMax) * 60);
+        issues.push({
+            severity: 'error', code: 'OVER_TIME',
+            message: `Route runs ${over} min past the ${result.driverMax}h block`
+        });
+    } else if (result.totalHours > result.driverMax * 0.95) {
+        issues.push({
+            severity: 'warning', code: 'NEAR_TIME',
+            message: `Route uses ${Math.round((result.totalHours / result.driverMax) * 100)}% of the block, very little slack`
+        });
+    }
+
+    // 2. Over package capacity
+    if (packages > VAN_CAPACITY) {
+        issues.push({
+            severity: 'error', code: 'OVER_PACKAGES',
+            message: `${packages} packages exceeds the ${VAN_CAPACITY} limit`
+        });
+    }
+
+    // 3. Over cubic capacity
+    if (result.totalVolumeL > cap.usableL) {
+        issues.push({
+            severity: 'error', code: 'OVER_VOLUME',
+            message: `${Math.round(result.totalVolumeL)}L will not fit a ${label} (${cap.usableL}L usable)`
+        });
+    } else if (result.totalVolumeL > cap.usableL * 0.95) {
+        issues.push({
+            severity: 'warning', code: 'NEAR_VOLUME',
+            message: `Load is at ${Math.round((result.totalVolumeL / cap.usableL) * 100)}% of ${label} capacity`
+        });
+    }
+
+    // 4. Item physically too large for the vehicle
+    if (result.maxDimCm > cap.maxDimCm) {
+        issues.push({
+            severity: 'error', code: 'ITEM_TOO_LONG',
+            message: `A ${result.maxDimCm}cm item will not fit a ${label} (max ${cap.maxDimCm}cm)`
+        });
+    }
+
+    // 5. Unreachable stop, and 6. sprawl introduced by a move
+    let prev = 0, worstLeg = 0;
+    for (const stop of stops) {
+        const leg = matrix[prev][stop.matrix_index];
+        if (leg >= UNREACHABLE) {
+            issues.push({
+                severity: 'error', code: 'UNREACHABLE',
+                message: `No drivable route to ${stop.address}`
+            });
+            break;
+        }
+        if (prev !== 0 && leg > worstLeg) worstLeg = leg;
+        prev = stop.matrix_index;
+    }
+    if (worstLeg > ABSOLUTE_MAX_STEP) {
+        issues.push({
+            severity: 'warning', code: 'LONG_LEG',
+            message: `${Math.round(worstLeg / 60)} min between two stops, above the ${Math.round(ABSOLUTE_MAX_STEP / 60)} min guideline`
+        });
+    }
+
+    return issues;
+};
+
+// Shuffle vehicles between finished routes so each route ends up on the
+// smallest thing that can carry it.
+//
+// The fleet stays exactly as the dispatcher entered it. All this decides is who
+// drives what. Without it a light route can sit on an SUV while a heavy one gets
+// a sedan it doesn't fit in, purely because of the order routes got built.
+//
+// Heaviest route picks first and takes the smallest vehicle that works, so the
+// big vehicles stay free for the routes that genuinely need them.
+const rematchVehicles = (drivers) => {
+    if (drivers.length < 2) return;
+
+    const needs = drivers.map(d => ({
+        driver: d,
+        vol: d.currentVolume || 0,
+        dim: d.currentMaxDim || 0
+    }));
+    needs.sort((a, b) => (b.vol - a.vol) || (b.dim - a.dim));
+
+    const pool = drivers.map(d => d.vehicle || LARGEST_TIER);
+    pool.sort((a, b) => tierCapacity(a).usableL - tierCapacity(b).usableL);
+
+    const used = new Array(pool.length).fill(false);
+    const assignment = new Map();
+
+    needs.forEach(nd => {
+        let picked = -1;
+        for (let i = 0; i < pool.length; i++) {
+            if (used[i]) continue;
+            const cap = tierCapacity(pool[i]);
+            if (nd.vol <= cap.usableL && nd.dim <= cap.maxDimCm) { picked = i; break; }
+        }
+        // Nothing in the fleet fits it, take the biggest left and let validation shout
+        if (picked === -1) {
+            for (let i = pool.length - 1; i >= 0; i--) if (!used[i]) { picked = i; break; }
+        }
+        if (picked !== -1) { used[picked] = true; assignment.set(nd.driver, pool[picked]); }
+    });
+
+    let moved = 0;
+    assignment.forEach((veh, driver) => {
+        if (driver.vehicle !== veh) { driver.vehicle = veh; moved++; }
+    });
+    if (moved > 0) console.log(`[FLEET] Moved ${moved} route(s) onto a better-fitting vehicle`);
+};
+
+// Flag stops that sit on their own with nothing nearby.
+//
+// These are the ones that quietly wreck a plan: a single package 60km out with
+// no neighbour inside half an hour either stretches a route across the map or
+// silently overflows. Better to name them up front so the dispatcher decides
+// what to do rather than finding out afterwards.
+const findRemoteStops = (stops, matrix) => {
+    const remote = [];
+    stops.forEach(s => {
+        let nearest = Infinity;
+        let nearestName = null;
+        stops.forEach(o => {
+            if (o === s) return;
+            const d = matrix[s.matrix_index][o.matrix_index];
+            if (d < UNREACHABLE && d < nearest) { nearest = d; nearestName = o.address; }
+        });
+        const stem = matrix[0][s.matrix_index];
+        const isolated = nearest > REMOTE_ISOLATION_SECONDS;
+        const farOut = stem > REMOTE_STEM_SECONDS;
+        if (!isolated && !farOut) return;
+
+        remote.push({
+            address: s.address,
+            packages: s.tbas.length,
+            tbas: s.tbas,
+            stemMin: Math.round(stem / 60),
+            nearestMin: nearest < UNREACHABLE ? Math.round(nearest / 60) : null,
+            nearestStop: nearestName,
+            isolated,
+            farOut,
+            reason: isolated && farOut
+                ? `${Math.round(stem / 60)} min from the warehouse with nothing within ${Math.round(nearest / 60)} min of it`
+                : isolated
+                    ? `Nearest other stop is ${Math.round(nearest / 60)} min away`
+                    : `${Math.round(stem / 60)} min from the warehouse`
+        });
+    });
+    remote.sort((a, b) => b.stemMin - a.stemMin);
+    return remote;
+};
+
+// Work out why each leftover stop didn't get placed. "Unassigned" on its own
+// tells a dispatcher nothing they can act on.
 const annotateOverflow = (overflowStops, bestVehicleId, matrix) => {
     const cap = tierCapacity(bestVehicleId);
     overflowStops.forEach(stop => {
@@ -806,10 +1401,10 @@ const annotateOverflow = (overflowStops, bestVehicleId, matrix) => {
 const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode = 'auto') => {
     if (regionalZips.length === 0 || driverList.length === 0) return [];
 
-    // Assign matrix indices (matrix row 0 = warehouse, 1..N = stops)
+    // Row 0 of the matrix is the warehouse, stops start at 1
     regionalZips.forEach((wp, i) => { wp.matrix_index = i + 1; });
 
-    // Split against the largest vehicle any driver in this fleet has.
+    // Split against the biggest vehicle in the fleet, not the smallest
     const fleetTopVehicle = driverList.reduce((best, d) => {
         const order = VEHICLE_TIERS.findIndex(t => t.id === (d.vehicle || LARGEST_TIER));
         const bestOrder = VEHICLE_TIERS.findIndex(t => t.id === best);
@@ -823,9 +1418,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
 
     let unassigned = splitZips.map(wp => ({ ...wp, isAssigned: false }));
 
-    // =====================================================
-    // FIND BEST SEED: densest area reachable from warehouse
-    // =====================================================
+    // Pick a starting stop: the densest area we can actually reach
     const findBestSeed = (excludeIndices, maxStemTime, searchRadius, vehicleId = LARGEST_TIER) => {
         const cap = tierCapacity(vehicleId);
         const available = unassigned.filter(u => {
@@ -847,11 +1440,12 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
         let bestScore = Infinity;
 
         pool.forEach(pkg => {
+            // Lower is better here. Same idea as manual: the amount of work
+            // waiting outweighs how far away it is.
             const distFromWarehouse = matrix[0][pkg.matrix_index];
-            let score = distFromWarehouse;
-            score -= pkg.tbas.length * 60;
+            let score = distFromWarehouse * SEED_STEM_WEIGHT;
+            score -= pkg.tbas.length * SEED_PACKAGE_WEIGHT;
 
-            // Density bonus
             let nearbyPackages = 0;
             available.forEach(other => {
                 if (other.matrix_index !== pkg.matrix_index) {
@@ -859,7 +1453,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     if (dist < searchRadius) nearbyPackages += other.tbas.length;
                 }
             });
-            score -= nearbyPackages * 30;
+            score -= nearbyPackages * SEED_NEARBY_WEIGHT;
 
             if (score < bestScore) {
                 bestScore = score;
@@ -870,14 +1464,13 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
         return bestSeed;
     };
 
-    // =====================================================
-    // AUTO MODE — sequential drivers with relaxation tiers
-    // =====================================================
+    // ---- AUTO MODE ----
+    // Add drivers one at a time until everything is placed
     if (mode === 'auto') {
         const maxHours = driverList[0].maxHours;
-        // Fleet ceiling: the largest vehicle auto-plan is allowed to assume.
-        // Each finished route is then classified DOWN to the smallest tier
-        // that actually fits it, so the dispatcher learns what they need.
+        // Biggest vehicle auto-plan may assume it has. Finished routes then get
+        // classified down to the smallest thing that actually fits them, so the
+        // dispatcher finds out what they really need rather than what we guessed.
         const fleetVehicle = driverList[0].vehicle || LARGEST_TIER;
         const baseConstraints = getConstraints(maxHours);
 
@@ -904,7 +1497,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 assignedIndices: new Set()
             };
 
-            // Try to find a seed — widen stem radius across tiers if needed
+            // Widen the search across tiers until something turns up
             let seed = null;
             for (let tier = 0; tier < RELAXATION_TIERS.length && !seed; tier++) {
                 const relaxed = getConstraints(maxHours, tier);
@@ -930,7 +1523,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
 
             console.log(`[AUTO] Driver ${driverCount} seeded: "${seed.address}" (${seed.tbas.length} pkgs) @ ${Math.round(stemTime/60)}min`);
 
-            // Grow with progressive relaxation tiers
+            // Grow the route, loosening up a tier at a time when nothing fits
             for (let tier = 0; tier < RELAXATION_TIERS.length; tier++) {
                 const constraints = getConstraints(maxHours, tier);
                 let growing = true;
@@ -952,7 +1545,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                         const distFromLast = matrix[lastStop.matrix_index][pkg.matrix_index];
                         if (distFromLast >= UNREACHABLE || distFromLast > constraints.stepLimit) return;
 
-                        // Diameter check
+                        // Would this stretch the route too wide?
                         let violates = false;
                         for (const idx of driver.assignedIndices) {
                             const dist = matrix[idx][pkg.matrix_index];
@@ -960,12 +1553,12 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                         }
                         if (violates) return;
 
-                        // Time check (hard ceiling)
+                        // Hard ceiling, never negotiable
                         const addedDrive = distFromLast * TRAFFIC_CITY;
                         const addedService = addPkgs * SECONDS_PER_PKG;
                         if (driver.currentDriveTime + driver.currentServiceTime + addedDrive + addedService > driver.timeBudget) return;
 
-                        // Productivity check: keep the block mostly delivering
+                        // Keep the block mostly delivering, not driving
                         if (!withinDriveShare(driver, addedDrive)) return;
 
                         const score = compactnessScore(driver, pkg, distFromLast, matrix);
@@ -998,11 +1591,10 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             }
         }
 
-        // =====================================================
-        // SWEEP: Any remaining unassigned packages get new drivers.
-        // Auto mode NEVER produces overflow — every package gets assigned.
-        // Group remaining by proximity into clusters, each cluster = 1 driver.
-        // =====================================================
+        // ---- SWEEP ----
+        // Anything still unassigned gets its own driver. Auto mode shouldn't
+        // produce overflow if it can help it, so keep spawning drivers until
+        // either everything is placed or nothing left can physically be carried.
         let remaining = unassigned.filter(u => !u.isAssigned);
         if (remaining.length > 0) {
             console.log(`[AUTO] Sweep phase: ${remaining.length} stops need new drivers`);
@@ -1023,7 +1615,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     assignedIndices: new Set()
                 };
                 
-                // Pick the unassigned stop closest to warehouse as seed
+                // Start from whatever's closest to the warehouse
                 let bestSeed = null;
                 let bestSeedDist = Infinity;
                 remaining.forEach(pkg => {
@@ -1035,15 +1627,15 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     }
                 });
 
-                // Nothing left that this vehicle can carry -> stop sweeping.
-                // Whatever remains falls through to overflow with a reason.
+                // Nothing left this vehicle can carry. Rest goes to overflow
+                // and gets a reason attached.
                 if (!bestSeed) break;
                 
                 bestSeed.isAssigned = true;
                 driver.stemTime = bestSeedDist * TRAFFIC_HIGHWAY;
                 applyStop(driver, bestSeed, driver.stemTime, bestSeed.tbas.length * SECONDS_PER_PKG);
                 
-                // Greedily add nearest remaining stops that fit time + capacity
+                // Then grab the nearest thing that fits, repeatedly
                 let growing = true;
                 while (growing) {
                     growing = false;
@@ -1060,7 +1652,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                         const d = matrix[lastStop.matrix_index][pkg.matrix_index];
                         if (d >= UNREACHABLE || d > ABSOLUTE_MAX_STEP) return;
 
-                        // Keep sweep routes as tight as planned routes
+                        // Sweep routes get held to the same tightness as planned ones
                         let violates = false;
                         for (const idx of driver.assignedIndices) {
                             const dd = matrix[idx][pkg.matrix_index];
@@ -1099,24 +1691,26 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             }
         }
 
-        // =====================================================
-        // POST-PROCESSING: Merge close routes, then swap-optimize
-        // =====================================================
+        // Clean-up passes: merge anything overlapping, then rebalance stops
         console.log(`[AUTO] Pre-optimize: ${finalRoutes.length} routes`);
         let optimizedDrivers = mergeCloseRoutes(finalRoutes, matrix, maxHours);
         console.log(`[AUTO] After merge: ${optimizedDrivers.length} routes`);
         optimizedDrivers = swapOptimize(optimizedDrivers, matrix, 'AUTO ');
         
-        // Re-index and finalize
+        // Renumber and wrap up
         const results = [];
         optimizedDrivers.forEach((driver, idx) => {
             driver.id = idx + 1;
+            // Auto mode invents its own fleet, so drop each route to the smallest
+            // vehicle that fits. No point asking for an SUV to carry a sedan load.
+            const needed = classifyVehicle(driver.currentVolume || 0, driver.currentMaxDim || 0);
+            if (needed) driver.vehicle = needed;
             const result = finalizeRoute(driver, startPoint, matrix);
             console.log(`[AUTO] Driver ${driver.id} final: ${driver.route.length} stops, ${driver.currentPackages} pkgs, ${result.totalVolumeL}L, longest ${result.maxDimCm}cm -> ${result.requiredVehicle}, ${result.totalHours.toFixed(2)}h`);
             results.push(result);
         });
 
-        // Overflow
+        // Whatever's left
         const overflow = unassigned.filter(u => !u.isAssigned);
         if (overflow.length > 0) {
             annotateOverflow(overflow, fleetVehicle, matrix);
@@ -1134,34 +1728,32 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
         return results;
     }
 
-    // =====================================================
-    // MANUAL MODE — TERRITORIAL AUCTION + relaxation tiers
-    //
-    // Key idea: each unassigned package "belongs" to the
-    // driver whose existing route is geographically closest.
-    // Drivers can ONLY pick from their own territory.
-    // This prevents routes from crossing each other.
-    // =====================================================
+    // ---- MANUAL MODE ----
+    // Fixed fleet, so it's an auction instead. Each unassigned package belongs
+    // to whichever driver's route is nearest, and a driver can only bid on
+    // packages in their own territory. That's what keeps routes from crossing.
     else {
         const totalHours = driverList.reduce((sum, d) => sum + d.maxHours, 0);
         const totalVolume = splitZips.reduce((s, z) => s + (z.volumeL || 0), 0);
 
-        // Fair-share slack: a driver may exceed its exact share by this factor
-        // before it stops bidding, which keeps clustering natural without
-        // letting the first bidder drain the fleet's whole cubic allowance.
-        const SHARE_SLACK = 1.35;
+        // A bit of headroom over the exact share, so clustering still looks
+        // natural. Without it routes come out mechanically even and ugly.
+        // Was a hardcoded 1.35 that no control could reach. Same trap as the
+        // orphan distance: you'd move a slider, nothing would change, and the
+        // real governing number was sitting in here.
+        const SHARE_SLACK = FAIR_SHARE_SLACK;
 
         const drivers = driverList.map(d => {
             const hourRatio = d.maxHours / totalHours;
 
-            // Count share -- always proportional now. The old "sparse" branch
-            // reset every budget to full van capacity, which removed all
-            // throttling and let one driver take everything it could reach.
+            // Always proportional now. There used to be a "sparse manifest"
+            // branch that reset everyone to full van capacity, which removed all
+            // throttling and let whoever bid first take the lot.
             let budget = Math.ceil(totalPackages * hourRatio * SHARE_SLACK);
             budget = Math.min(budget, VAN_CAPACITY);
             budget = Math.max(budget, 5);
 
-            // Cubic share -- proportional to hours, capped by the vehicle.
+            // Same idea for volume, capped by what the vehicle can hold
             const vehCap = tierCapacity(d.vehicle || LARGEST_TIER);
             const volumeBudget = Math.min(
                 vehCap.usableL,
@@ -1190,17 +1782,13 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             };
         });
 
-        // Sort by hours (longest first — they seed farther out)
+        // Longest blocks first, they can reach further out
         drivers.sort((a, b) => b.maxHours - a.maxHours);
 
-        // =====================================================
-        // SEED: Farthest-first spread — maximize geographic coverage
-        //
-        // First seed = densest reachable area (classic).
-        // Each subsequent seed = farthest from ALL existing seeds,
-        // weighted by local density. This ensures seeds cover
-        // distinct geographic clusters instead of bunching up.
-        // =====================================================
+        // ---- SEEDING ----
+        // First driver starts in the densest area we can reach. Everyone after
+        // that starts as far from the existing seeds as density allows, so the
+        // fleet spreads over separate clusters instead of piling into one.
         const baseConstraints = getConstraints(drivers[0].maxHours);
         const seedIndices = []; // matrix_index of each placed seed
         
@@ -1235,28 +1823,30 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 
                 const distFromWarehouse = matrix[0][pkg.matrix_index];
 
-                // Stem is paid once, so it is only a mild preference, not a
-                // penalty. A long drive out to a dense cluster is a good route;
-                // what matters is how tight things are once you arrive.
-                const stemPreference = distFromWarehouse * 0.25;
+                // Stem is paid once, so it barely matters next to how much work
+                // is waiting. It used to be weighted 0.25 per second against 60
+                // per package, which meant a single-package ZIP 3 minutes out
+                // beat a six-package ZIP 40 minutes out. Backwards: we care
+                // about getting packages delivered.
+                const stemPreference = distFromWarehouse * SEED_STEM_WEIGHT;
+                const workHere = (pkg.tbas.length * SEED_PACKAGE_WEIGHT)
+                               + (nearbyPkgs * SEED_NEARBY_WEIGHT);
 
                 if (driverIdx === 0) {
-                    const score = -stemPreference + (pkg.tbas.length * 60) + (nearbyPkgs * 40);
+                    const score = workHere - stemPreference;
                     if (score > bestScore) { bestScore = score; bestSeed = pkg; }
                 } else {
-                    // Later seeds still spread out, but spread is now a
-                    // tiebreaker rather than the dominant term. Seeding a
-                    // remote 1-package ZIP used to win on spread alone and
-                    // burn the whole block on driving.
+                    // Spread stops every driver seeding on top of each other.
+                    // Worth watching: crank it too high and a far empty ZIP can
+                    // out-earn a busy one just by being far away.
                     let minDistToExisting = Infinity;
                     for (const existIdx of seedIndices) {
                         const d = matrix[existIdx][pkg.matrix_index];
                         if (d < minDistToExisting) minDistToExisting = d;
                     }
 
-                    const score = (minDistToExisting * 0.35)
-                                + (nearbyPkgs * 50)
-                                + (pkg.tbas.length * 80)
+                    const score = workHere
+                                + (minDistToExisting * SEED_SPREAD_WEIGHT)
                                 - stemPreference;
                     if (score > bestScore) { bestScore = score; bestSeed = pkg; }
                 }
@@ -1273,27 +1863,31 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 applyStop(driver, bestSeed, stemTime, serviceTime);
                 seedIndices.push(bestSeed.matrix_index);
                 
-                console.log(`[MANUAL] Driver ${driver.id} seeded: "${bestSeed.address}" (${bestSeed.tbas.length} pkgs) @ ${Math.round(stemTime/60)}min`);
+                // Log the whole cluster, not just the seed stop. A 1-package ZIP
+                // with five more next door is a 6-package area, and the seed
+                // score treats it that way.
+                let reach = 0;
+                unassigned.forEach(o => {
+                    if (o.isAssigned || o === bestSeed) return;
+                    const d = matrix[bestSeed.matrix_index][o.matrix_index];
+                    if (d < baseConstraints.stepLimit) reach += o.tbas.length;
+                });
+                console.log(`[MANUAL] Driver ${driver.id} seeded: "${bestSeed.address}" `
+                    + `(${bestSeed.tbas.length} here, ${reach} more within `
+                    + `${Math.round(baseConstraints.stepLimit/60)}min) @ ${Math.round(stemTime/60)}min out`);
             }
         });
 
-        // =====================================================
-        // TERRITORIAL AUCTION with progressive relaxation
-        //
-        // Each round:
-        //  1. For each unassigned pkg, find which seeded driver's
-        //     route is closest (min matrix dist to any route stop)
-        //  2. Each driver picks the best candidate from ONLY
-        //     their territorial pool (closest to last stop)
-        //  3. Capacity + time checks still enforced
-        //  4. If nobody can grab anything, relax to next tier
-        // =====================================================
+        // ---- THE AUCTION ----
+        // Each round: work out whose route each leftover package is nearest to,
+        // then let every driver take the best one from their own pile. Capacity
+        // and time still apply. If a whole round passes with nobody able to take
+        // anything, loosen up a tier and go again.
         const seededDrivers = drivers.filter(d => d.route.length > 0);
 
-        // Phase 0 enforces fair shares so work spreads across the fleet.
-        // Phase 1 lifts them so nothing is left stranded once everyone has
-        // had a fair chance. Throughput first: an unassigned package is a
-        // worse outcome than an unevenly loaded driver.
+        // Two passes. The first holds everyone to their fair share so work
+        // spreads out. The second drops the shares entirely and lets whoever can
+        // take what's left. An unassigned package is worse than an uneven driver.
         for (let phase = 0; phase < 2; phase++) {
         const enforceShares = (phase === 0);
 
@@ -1329,14 +1923,12 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 const stillRemaining = unassigned.filter(u => !u.isAssigned);
                 if (stillRemaining.length === 0) break;
 
-                // ---- TERRITORIAL MAPPING ----
-                // Each package "belongs" to the driver whose route is closest
+                // Sort every leftover package into whoever's route it's nearest to
                 const driverBins = {};
                 seededDrivers.forEach(d => { driverBins[d.id] = []; });
 
                 stillRemaining.forEach(pkg => {
-                    // Every driver that could physically take this stop, with
-                    // how far it sits from their current route.
+                    // Who could physically take this, and how far away are they
                     const candidates = [];
                     seededDrivers.forEach(driver => {
                         if (enforceShares && driver.currentPackages >= driver.packageBudget) return;
@@ -1347,11 +1939,10 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     });
                     if (candidates.length === 0) return;
 
-                    // If one driver is clearly closest, the stop is theirs. If
-                    // several sit within a few minutes of each other they count
-                    // as equally close, and the least loaded one takes it.
-                    // Beyond the tolerance closeness wins outright, so a stop is
-                    // never handed to a genuinely farther driver for balance.
+                    // Clear winner takes it. If several are within a few minutes
+                    // of each other, call it a tie and give it to whoever has the
+                    // least work. Nobody genuinely further away ever gets it just
+                    // for balance.
                     const closestDist = Math.min(...candidates.map(c => c.dist));
                     const tied = candidates.filter(c => c.dist <= closestDist + TIE_TOLERANCE_SECONDS);
 
@@ -1367,7 +1958,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     driverBins[chosen.driver.id].push({ pkg, routeDist: chosen.dist });
                 });
 
-                // ---- EACH DRIVER PICKS BEST FROM THEIR TERRITORY ----
+                // Now everyone takes their best available option
                 let madeAssignment = false;
 
                 seededDrivers.forEach(driver => {
@@ -1392,7 +1983,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                         const distFromLast = matrix[lastStop.matrix_index][pkg.matrix_index];
                         if (distFromLast >= UNREACHABLE) return;
 
-                        // Step check
+                        // Too far from the last stop?
                         if (distFromLast > constraints.stepLimit) return;
 
                         // Diameter check
@@ -1412,8 +2003,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                         // Productivity check: keep the block mostly delivering
                         if (!withinDriveShare(driver, addedDrive)) return;
 
-                        // Scoring: closeness to the last stop AND how much the
-                        // stop widens the route overall
+                        // Score on nearness plus how much it stretches the route
                         const score = compactnessScore(driver, pkg, distFromLast, matrix);
 
                         if (score < bestScore) {
@@ -1435,15 +2025,14 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
         }
         }
 
-        // =====================================================
-        // ORPHAN RESCUE: territorial — assign to closest route
-        // only if time budget allows. No diameter/step checks.
-        // =====================================================
+        // ---- ORPHANS ----
+        // Anything still homeless goes to the nearest route that has room.
+        // Width and step rules are dropped here, but distance still has a cap.
         let orphans = unassigned.filter(u => !u.isAssigned);
         if (orphans.length > 0 && seededDrivers.length > 0) {
             console.log(`[MANUAL] Orphan rescue: ${orphans.length} stops to place`);
 
-            // Sort orphans: farthest from warehouse first (hardest to place)
+            // Hardest ones first, they have the fewest options
             orphans.sort((a, b) => matrix[0][b.matrix_index] - matrix[0][a.matrix_index]);
 
             orphans.forEach(orphan => {
@@ -1457,12 +2046,12 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                     const dist = minDistToRoute(orphan.matrix_index, driver.route, matrix);
                     if (dist >= UNREACHABLE) return;
 
-                    // Hard geographic cap. Bolting a distant orphan onto the
-                    // nearest route is what produced long tentacles across the
-                    // map. Leave it unassigned instead and report why.
+                    // Hard cap. Bolting a far orphan onto the nearest route is
+                    // what used to draw those long tentacles across the map.
+                    // Better to leave it unassigned and say why.
                     if (dist > ORPHAN_MAX_ATTACH) return;
 
-                    // And it must not blow out the route's overall span
+                    // And it can't blow out the route's overall width
                     const wouldBeDiameter = Math.max(
                         routeDiameter(driver.route, matrix),
                         Math.max(...driver.route.map(s => {
@@ -1494,11 +2083,8 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             });
         }
 
-        // =====================================================
-        // UNUSED DRIVER SWEEP: If packages remain AND there are
-        // drivers with no route yet, put those drivers to work.
-        // Seed them with remaining packages and grow greedily.
-        // =====================================================
+        // ---- IDLE DRIVERS ----
+        // Packages left and drivers sitting empty. Put them to work.
         let stillRemaining = unassigned.filter(u => !u.isAssigned);
         const unusedDrivers = drivers.filter(d => d.route.length === 0);
         
@@ -1509,7 +2095,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 stillRemaining = unassigned.filter(u => !u.isAssigned);
                 if (stillRemaining.length === 0) break;
                 
-                // Seed with closest unassigned to warehouse
+                // Start them on whatever's nearest the warehouse
                 let bestSeed = null;
                 let bestDist = Infinity;
                 stillRemaining.forEach(pkg => {
@@ -1531,7 +2117,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 driver.stemTime = bestDist * TRAFFIC_HIGHWAY;
                 applyStop(driver, bestSeed, driver.stemTime, bestSeed.tbas.length * SECONDS_PER_PKG);
                 
-                // Greedily grow: nearest unassigned that fits
+                // Then nearest thing that fits, repeatedly
                 let growing = true;
                 while (growing) {
                     growing = false;
@@ -1578,24 +2164,17 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             }
         }
 
-        // =====================================================
-        // POST-PROCESSING: Swap-optimize stop assignments
-        // =====================================================
+        // Rebalance stops between routes
         let activeDrivers = drivers.filter(d => d.route.length > 0);
         activeDrivers = swapOptimize(activeDrivers, matrix, 'MANUAL ');
 
-        // =====================================================
-        // REBALANCE: Fill empty drivers by splitting heavy routes
-        //
-        // If fewer drivers have routes than were requested,
-        // take the farthest stops from the heaviest routes and
-        // give them to empty drivers. This ensures every driver
-        // the dispatcher added gets a route.
-        // =====================================================
+        // ---- FILL EMPTY DRIVERS ----
+        // If the dispatcher added five drivers, five drivers get work. Peel the
+        // outlying stops off the heaviest routes and hand them over.
         let emptyDrivers = drivers.filter(d => d.route.length === 0);
         
         while (emptyDrivers.length > 0) {
-            // Find the route with the most stops (must have >=3 to split)
+            // Heaviest route, needs at least 3 stops to be worth splitting
             activeDrivers = drivers.filter(d => d.route.length > 0);
             let heaviest = null;
             let heaviestStops = 0;
@@ -1606,7 +2185,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 }
             });
             
-            // Can't split a route with fewer than 3 stops
+            // Nothing big enough left to split
             if (!heaviest || heaviest.route.length < 3) {
                 console.log(`[MANUAL] Rebalance: no route large enough to split (largest: ${heaviestStops} stops)`);
                 break;
@@ -1614,11 +2193,10 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             
             const emptyDriver = emptyDrivers[0];
             
-            // Find the stop in the heaviest route that is farthest from
-            // the route's other stops (the outlier). Peel it off along
-            // with any nearby stops to form a new cluster for the empty driver.
+            // Find the biggest outlier, then peel it off along with whatever
+            // sits near it, so the new driver gets a cluster and not scraps.
             
-            // Compute each stop's average distance to all other stops in the route
+            // How far each stop sits from the rest of its route
             const stopScores = heaviest.route.map((stop, idx) => {
                 let totalDist = 0;
                 let count = 0;
@@ -1631,18 +2209,17 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 return { stop, idx, avgDist: count > 0 ? totalDist / count : 0 };
             });
             
-            // Sort: farthest outliers first
+            // Worst offenders first
             stopScores.sort((a, b) => b.avgDist - a.avgDist);
             
-            // Take the top outlier(s): peel off ~half the stops or at least 1
-            // Prefer peeling stops that are close to each other (cluster the peeled ones)
+            // Aim to peel about half, keeping the peeled stops near each other
             const peelSeed = stopScores[0].stop;
             const peelIndices = new Set([stopScores[0].idx]);
             
-            // How many to peel: aim for fair share
+            // Roughly a fair share
             const targetPeel = Math.max(1, Math.floor(heaviest.route.length / 2));
             
-            // Add stops closest to the peel seed, up to target
+            // Fill up with whatever is closest to the one we started with
             const candidates = stopScores.slice(1).map(s => ({
                 ...s,
                 distToPeel: matrix[peelSeed.matrix_index][s.stop.matrix_index]
@@ -1653,7 +2230,7 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
                 peelIndices.add(c.idx);
             }
             
-            // Move peeled stops to the empty driver
+            // Hand them over
             const peeledStops = [];
             const keptStops = [];
             heaviest.route.forEach((stop, idx) => {
@@ -1669,20 +2246,21 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
             
             console.log(`[MANUAL] Rebalance: split Driver ${heaviest.id} (kept ${keptStops.length}) -> Driver ${emptyDriver.id} (got ${peeledStops.length})`);
             
-            // Refresh the empty list
+            // Anyone still empty?
             emptyDrivers = drivers.filter(d => d.route.length === 0);
         }
         
-        // Run swap-optimize again after rebalance to clean up
+        // One more rebalance pass now that everyone has work
         emptyDrivers = drivers.filter(d => d.route.length === 0);
         activeDrivers = drivers.filter(d => d.route.length > 0);
         if (emptyDrivers.length === 0 && activeDrivers.length === drivers.length) {
             activeDrivers = swapOptimize(activeDrivers, matrix, 'MANUAL-REBAL ');
         }
 
-        // =====================================================
-        // FINALIZE
-        // =====================================================
+        // Put every route on the smallest vehicle in the fleet that can take it
+        rematchVehicles(activeDrivers);
+
+        // Wrap up
         const finalRoutes = [];
 
         activeDrivers.forEach(driver => {
@@ -1712,25 +2290,28 @@ const planRoutesForRegion = (regionalZips, driverList, matrix, startPoint, mode 
     }
 };
 
-// =====================================================
-// ALGORITHM E — cluster-first planner (opt-in)
-// =====================================================
+// The other planner. Off by default, switchable from the UI.
 const planRoutesByCluster = require('./cluster_planner')({
     VAN_CAPACITY, SECONDS_PER_PKG, UNREACHABLE,
     TRAFFIC_HIGHWAY, TRAFFIC_CITY,
     ABSOLUTE_MAX_STEP, MAX_LOCAL_DRIVE_SHARE,
     LARGEST_TIER, tierCapacity, classifyVehicle,
-    splitBigZips, optimizeRouteWith2Opt, annotateOverflow
+    splitBigZips, optimizeRouteWith2Opt, annotateOverflow, computeMetrics
 });
 
-// =====================================================
-// API ENDPOINT
-// =====================================================
+// ---- API ----
 
 app.post('/calculate-routes', async (req, res) => {
     try {
         const { loosePackages = [], bags = [], drivers, mode,
-                residentialOnly = false, algorithm = 'greedy' } = req.body;
+                residentialOnly = false, algorithm = 'greedy',
+                config = null } = req.body;
+
+        // Constraint tweaks from the editor, this request only
+        const appliedConfig = applyConfig(config);
+        if (Object.keys(appliedConfig).length > 0) {
+            console.log('[CONFIG] overrides:', JSON.stringify(appliedConfig));
+        }
 
         console.log(`\n========== NEW REQUEST ==========`);
         console.log(`Mode: "${mode}" | Algorithm: "${algorithm}" | Drivers: ${drivers ? drivers.length : 0}`);
@@ -1743,14 +2324,12 @@ app.post('/calculate-routes', async (req, res) => {
 
         if (!drivers) return res.status(400).json({ error: 'No drivers' });
 
-        // =====================================================
-        // INTAKE FILTERS
-        // Packages are split into three streams before routing:
-        //   deliverable   -> goes to drivers
-        //   fcReturns     -> destination is a station code, not a customer
-        //   addressHolds  -> non-residential while residential-only is on
-        // Only the first stream reaches the solver.
-        // =====================================================
+        // ---- INTAKE ----
+        // Three piles before anything gets routed:
+        //   deliverable  - goes out with a driver
+        //   fcReturns    - destination is a station code, ships back to the FC
+        //   addressHolds - business address while residential-only is switched on
+        // Only the first pile reaches the solver.
         const fcReturns = [];
         const addressHolds = [];
         const deliverable = [];
@@ -1782,7 +2361,7 @@ app.post('/calculate-routes', async (req, res) => {
             return true;
         };
 
-        // Volume metadata per TBA, computed once and reused everywhere
+        // Work out each package's volume once and hang onto it
         const metaFor = (p) => {
             if (p.volumeL !== undefined && p.maxDimCm !== undefined) {
                 return { effectiveL: +p.volumeL || 0, maxDimCm: +p.maxDimCm || 0, category: p.category || 'UNKNOWN' };
@@ -1815,7 +2394,7 @@ app.post('/calculate-routes', async (req, res) => {
         if (fcReturns.length > 0) console.log(`[INTAKE] ${fcReturns.length} package(s) held for FC return`);
         if (addressHolds.length > 0) console.log(`[INTAKE] ${addressHolds.length} package(s) held: non-residential`);
 
-        // Bags are screened per item; a bag keeps only its deliverable items.
+        // Screen bags item by item, keep whatever survives
         const screenedBags = bags.map(b => ({
             name: b.name,
             items: b.items.filter(i => screen(i, b.name))
@@ -1887,17 +2466,155 @@ app.post('/calculate-routes', async (req, res) => {
             return acc;
         }, {});
 
+        // Split the fleet across states BEFORE planning.
+        //
+        // Every state used to get handed the whole driver list, so a PA+NJ
+        // manifest produced roughly double the routes you asked for. Nobody
+        // noticed because we only ever run PA.
+        //
+        // Drivers never cross state lines, which is the point of bucketing in
+        // the first place, so each one belongs to exactly one state. Shares are
+        // proportional to how much work each state holds. Auto mode is exempt:
+        // it invents its own fleet, so every state can have as many as it needs.
+        const splitFleetByState = (fleet, stateBuckets) => {
+            const states = Object.keys(stateBuckets);
+            const alloc = {};
+            if (states.length === 1) { alloc[states[0]] = fleet; return alloc; }
+
+            const work = {};
+            let totalWork = 0;
+            states.forEach(st => {
+                work[st] = stateBuckets[st].reduce((a, s) => a + s.tbas.length, 0);
+                totalWork += work[st];
+            });
+
+            // Biggest workload first, so rounding leftovers land where they help
+            const ordered = [...states].sort((a, b) => work[b] - work[a]);
+
+            // Longest blocks first within the fleet, so the states doing the most
+            // get the drivers with the most hours
+            const pool = [...fleet].sort((a, b) => b.maxHours - a.maxHours);
+
+            const counts = {};
+            let handedOut = 0;
+            ordered.forEach((st, i) => {
+                // Every state with work gets at least one driver
+                const share = totalWork > 0 ? (work[st] / totalWork) : (1 / states.length);
+                let n = Math.max(1, Math.round(fleet.length * share));
+                if (i === ordered.length - 1) n = Math.max(0, fleet.length - handedOut);
+                n = Math.min(n, fleet.length - handedOut);
+                counts[st] = n;
+                handedOut += n;
+            });
+
+            // Anything left over from rounding goes to the busiest state
+            if (handedOut < fleet.length && ordered.length) {
+                counts[ordered[0]] += fleet.length - handedOut;
+            }
+
+            let cursor = 0;
+            ordered.forEach(st => {
+                alloc[st] = pool.slice(cursor, cursor + counts[st]);
+                cursor += counts[st];
+            });
+
+            states.forEach(st => {
+                const got = (alloc[st] || []).length;
+                console.log(`[FLEET] ${st}: ${work[st]} packages -> ${got} driver(s)`);
+                if (got === 0) {
+                    console.log(`[FLEET] Warning: ${st} has work but no driver, its stops will overflow`);
+                }
+            });
+            return alloc;
+        };
+
+        const fleetByState = (mode === 'auto')
+            ? null
+            : splitFleetByState(drivers || [], buckets);
+
         let allRoutes = [];
+        let naiveDriveTotal = 0, naiveViolations = 0, naiveChunks = 0;
+        const remoteStops = [];
+        const naiveBreakdown = {};
         for (const state of Object.keys(buckets)) {
             console.log(`\n--- Processing ${state}: ${buckets[state].length} stops ---`);
             const stops = buckets[state];
-            const matrix = await getDistanceMatrix([startingLocation, ...stops]);
+            const distMatrix = [];
+            const matrix = await getDistanceMatrix([startingLocation, ...stops], distMatrix);
             const planner = algorithm === 'cluster' ? planRoutesByCluster : planRoutesForRegion;
-            const result = planner(stops, drivers, matrix, startingLocation, mode);
+            const stateFleet = fleetByState ? (fleetByState[state] || []) : drivers;
+
+            if (fleetByState && stateFleet.length === 0) {
+                // No driver available for this state, so everything here is
+                // unassigned. Say why rather than dropping it silently.
+                annotateOverflow(stops, LARGEST_TIER, matrix);
+                stops.forEach(s => {
+                    s.overflowReason = `No driver was allocated to ${state}. `
+                        + `Add a driver or plan this state separately.`;
+                });
+                allRoutes.push({
+                    route: stops, totalHours: 0, driverId: 'OVERFLOW',
+                    driverMax: 0, isOverflow: true,
+                    totalVolumeL: +stops.reduce((a, s) => a + (s.volumeL || 0), 0).toFixed(1),
+                    maxDimCm: stops.reduce((m, s) => Math.max(m, s.maxDimCm || 0), 0),
+                    totalPackages: stops.reduce((a, s) => a + s.tbas.length, 0)
+                });
+                continue;
+            }
+
+            const result = planner(stops, stateFleet, matrix, startingLocation, mode);
+            // Remember which matrix this was planned against, validation needs it
+            result.forEach(r => { r._matrix = matrix; });
+
+            // Mileage and running cost per route
+            const MPG = { SEDAN: MPG_SEDAN, SUV: MPG_SUV, TRUCK: MPG_TRUCK };
+            result.forEach(r => {
+                if (r.isOverflow) return;
+                const stops2 = r.route.filter(s => !s.isWarehouse);
+                const metres = routeDistanceMeters(stops2, distMatrix);
+                const miles = metres / 1609.34;
+                const mpg = MPG[r.assignedVehicle] || MPG_SEDAN;
+                const gallons = mpg > 0 ? miles / mpg : 0;
+                r.mileage = {
+                    miles: +miles.toFixed(1),
+                    km: +(metres / 1000).toFixed(1),
+                    gallons: +gallons.toFixed(2),
+                    fuelCost: +(gallons * FUEL_PRICE_PER_GAL).toFixed(2),
+                    runningCost: +(miles * COST_PER_MILE).toFixed(2),
+                    costPerPackage: null
+                };
+                const pk = stops2.reduce((a, s) => a + s.tbas.length, 0);
+                if (pk > 0) r.mileage.costPerPackage = +(r.mileage.runningCost / pk).toFixed(2);
+            });
+
+            // Stops with nothing near them, flagged before the dispatcher notices
+            findRemoteStops(stops, matrix).forEach(x => remoteStops.push(x));
+
+            // Like for like: the comparison only covers stops we actually
+            // delivered. Counting overflowed ones would flatter us for
+            // skipping work we couldn't fit.
+            const planned = result.filter(r => !r.isOverflow && r.route.length > 0);
+            const deliveredStops = [];
+            planned.forEach(r => r.route.forEach(s => { if (!s.isWarehouse) deliveredStops.push(s); }));
+            if (planned.length > 0 && deliveredStops.length > 0) {
+                // Same fleet the solver ended up using
+                const usedFleet = planned.map(r => ({
+                    maxHours: r.driverMax,
+                    vehicle: r.assignedVehicle || LARGEST_TIER
+                }));
+                const naive = naivePlanDriveTime(deliveredStops, usedFleet, matrix);
+                naiveDriveTotal += naive.driveSec;
+                naiveViolations += naive.violations;
+                Object.keys(naive.breakdown).forEach(k => {
+                    naiveBreakdown[k] = (naiveBreakdown[k] || 0) + naive.breakdown[k];
+                });
+                naiveChunks += naive.chunks;
+            }
+
             allRoutes.push(...result);
         }
 
-        // Re-index driver IDs
+        // Renumber so the IDs run 1..N
         let driverIdx = 1;
         allRoutes.forEach(r => {
             if (!r.driverId.toString().includes("OVERFLOW")) {
@@ -1905,7 +2622,7 @@ app.post('/calculate-routes', async (req, res) => {
             }
         });
 
-        // Flag any route whose load exceeds the vehicle it was assigned
+        // Anything loaded beyond what its vehicle can take
         allRoutes.forEach(r => {
             if (r.driverId.toString().includes('OVERFLOW')) return;
             if (!r.assignedVehicle) return;
@@ -1918,10 +2635,54 @@ app.post('/calculate-routes', async (req, res) => {
             }
         });
 
+        // Check everything before it goes out the door
+        let errorCount = 0, warningCount = 0;
+        allRoutes.forEach(r => {
+            r.issues = r._matrix ? validateRoute(r, r._matrix) : [];
+            delete r._matrix;
+            r.issues.forEach(i => i.severity === 'error' ? errorCount++ : warningCount++);
+        });
+        if (errorCount || warningCount) {
+            console.log(`[VALIDATE] ${errorCount} error(s), ${warningCount} warning(s)`);
+        }
+
+        // Roll the numbers up across the fleet
+        const planned = allRoutes.filter(r => !r.isOverflow && r.metrics);
+        const optimizedTotal = planned.reduce((s, r) => s + r.metrics.optimizedDriveSec, 0);
+        const fleetMetrics = {
+            // Versus splitting the manifest into equal piles with no software
+            optimizedDriveSec: optimizedTotal,
+            naiveDriveSec: naiveDriveTotal,
+            naiveSavedSec: naiveDriveTotal - optimizedTotal,
+            naiveSavedPct: naiveDriveTotal > 0
+                ? +(((naiveDriveTotal - optimizedTotal) / naiveDriveTotal) * 100).toFixed(1) : 0,
+
+            // How many of the unplanned piles you couldn't actually send out.
+            // This plan should always be zero.
+            naiveViolations,
+            naiveBreakdown,
+            naiveChunks,
+            planViolations: errorCount,
+            routesPlanned: planned.length
+        };
+
+        // No fleet totals. What matters is comparing one driver's route against
+        // another's, so the per-route figures are the ones that get shown.
+
         console.log(`\n========== COMPLETE: ${allRoutes.length} routes | ${fcReturns.length} FC | ${addressHolds.length} held ==========\n`);
 
         res.json({
             routes: allRoutes,
+            fleetMetrics,
+            remoteStops,
+            validation: { errors: errorCount, warnings: warningCount },
+            configSchema: CONFIG_SCHEMA,
+            configDefaults: DEFAULTS,
+            vehicleSchema: VEHICLE_SCHEMA,
+            vehicleDefaults: (() => {
+                const d = {}; VEHICLE_SCHEMA.forEach(s => { d[s.key] = s.def; }); return d;
+            })(),
+            configApplied: appliedConfig,
             fcReturns,
             addressHolds,
             algorithm,
@@ -1936,7 +2697,219 @@ app.post('/calculate-routes', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: error.message });
+    } finally {
+        // Always put the defaults back, or the next request inherits these
+        resetConfig();
     }
+});
+
+// =====================================================
+// MANUAL REASSIGNMENT
+//
+// Takes the plan that's on screen plus one move, applies it, then rebuilds
+// every number from scratch: sequence, times, mileage, safety checks.
+//
+// Deliberately recomputes rather than patching the two routes involved. A move
+// changes stop order, which changes drive time, which changes whether the route
+// still fits the block. Patching would mean re-deriving all of that by hand and
+// getting it subtly wrong.
+// =====================================================
+app.post('/reassign', async (req, res) => {
+    try {
+        const { routes = [], move = null, config = null, departSeconds = 0 } = req.body;
+        applyConfig(config);
+
+        if (!move || !move.fromDriverId || !move.toDriverId || !move.address) {
+            return res.status(400).json({ error: 'Move needs a source driver, a target driver and a stop' });
+        }
+        if (String(move.fromDriverId) === String(move.toDriverId)) {
+            return res.status(400).json({ error: 'That stop is already on that driver' });
+        }
+
+        // Rebuild working copies of every route
+        const work = routes.map(r => ({
+            driverId: r.driverId,
+            driverMax: r.driverMax,
+            vehicle: r.assignedVehicle || LARGEST_TIER,
+            isOverflow: !!r.isOverflow,
+            stops: r.route.filter(s => !s.isWarehouse).map(s => ({ ...s }))
+        }));
+
+        // "OVERFLOW" is a valid source: assigning unassigned packages is the
+        // main thing a dispatcher wants to do after a plan comes back.
+        const from = String(move.fromDriverId) === 'OVERFLOW'
+            ? work.find(w => w.isOverflow)
+            : work.find(w => String(w.driverId) === String(move.fromDriverId));
+        const to = work.find(w => String(w.driverId) === String(move.toDriverId));
+        if (!from || !to) return res.status(400).json({ error: 'Driver not found in the current plan' });
+
+        const srcIdx = from.stops.findIndex(s => s.address === move.address);
+        if (srcIdx === -1) return res.status(400).json({
+            error: `${move.address} is not on ${move.fromDriverId === 'OVERFLOW' ? 'the unassigned pile' : 'driver ' + move.fromDriverId}` });
+        const srcStop = from.stops[srcIdx];
+
+        // Whole stop, or just the tracking numbers that were ticked
+        const movingTbas = (Array.isArray(move.tbas) && move.tbas.length)
+            ? move.tbas.filter(t => srcStop.tbas.includes(t))
+            : [...srcStop.tbas];
+        if (movingTbas.length === 0) return res.status(400).json({ error: 'No packages selected' });
+
+        // Bags travel together. Splitting one is never allowed.
+        if (srcStop.bagId && movingTbas.length !== srcStop.tbas.length) {
+            return res.status(400).json({
+                error: `${move.address} is a bag. Bags cannot be split, move the whole stop instead.`
+            });
+        }
+
+        const perTbaVol = srcStop.tbas.length > 0
+            ? (srcStop.volumeL || 0) / srcStop.tbas.length : 0;
+        const movingVol = +(perTbaVol * movingTbas.length).toFixed(2);
+        const partial = movingTbas.length < srcStop.tbas.length;
+
+        // Take them off the source
+        if (partial) {
+            srcStop.tbas = srcStop.tbas.filter(t => !movingTbas.includes(t));
+            srcStop.volumeL = +((srcStop.volumeL || 0) - movingVol).toFixed(2);
+        } else {
+            from.stops.splice(srcIdx, 1);
+        }
+
+        // Add to the target, merging if that driver already visits this ZIP
+        const existing = to.stops.find(s => s.address === move.address);
+        if (existing) {
+            existing.tbas = [...existing.tbas, ...movingTbas];
+            existing.volumeL = +((existing.volumeL || 0) + movingVol).toFixed(2);
+            existing.maxDimCm = Math.max(existing.maxDimCm || 0, srcStop.maxDimCm || 0);
+        } else {
+            to.stops.push({
+                ...srcStop,
+                tbas: movingTbas,
+                volumeL: movingVol,
+                maxDimCm: partial ? (srcStop.maxDimCm || 0) : srcStop.maxDimCm
+            });
+        }
+
+        // Rebuild the matrix over everything still in the plan
+        const allStops = [];
+        work.forEach(w => w.stops.forEach(s => allStops.push(s)));
+        if (allStops.length === 0) return res.status(400).json({ error: 'Nothing left to plan' });
+
+        allStops.forEach((s, i) => { s.matrix_index = i + 1; });
+        const distMatrix = [];
+        const matrix = await getDistanceMatrix([startingLocation, ...allStops], distMatrix);
+
+        // Re-sequence and re-measure every route
+        const MPG = { SEDAN: MPG_SEDAN, SUV: MPG_SUV, TRUCK: MPG_TRUCK };
+        const rebuilt = [];
+
+        work.forEach(w => {
+            if (w.isOverflow) {
+                if (w.stops.length === 0) return;
+                annotateOverflow(w.stops, LARGEST_TIER, matrix);
+                rebuilt.push({
+                    route: w.stops, totalHours: 0, driverId: 'OVERFLOW', driverMax: 0,
+                    isOverflow: true,
+                    totalVolumeL: +w.stops.reduce((a, s) => a + (s.volumeL || 0), 0).toFixed(1),
+                    maxDimCm: w.stops.reduce((m, s) => Math.max(m, s.maxDimCm || 0), 0),
+                    totalPackages: w.stops.reduce((a, s) => a + s.tbas.length, 0)
+                });
+                return;
+            }
+
+            const driver = {
+                id: w.driverId,
+                maxHours: w.driverMax,
+                vehicle: w.vehicle,
+                timeBudget: w.driverMax * 3600,
+                route: w.stops,
+                currentPackages: w.stops.reduce((a, s) => a + s.tbas.length, 0),
+                currentVolume: +w.stops.reduce((a, s) => a + (s.volumeL || 0), 0).toFixed(2),
+                currentMaxDim: w.stops.reduce((m, s) => Math.max(m, s.maxDimCm || 0), 0),
+                currentDriveTime: 0,
+                currentServiceTime: 0,
+                stemTime: 0,
+                assignedIndices: new Set(w.stops.map(s => s.matrix_index))
+            };
+
+            if (driver.route.length === 0) {
+                rebuilt.push({
+                    route: [{ ...startingLocation, matrix_index: 0, tbas: ['WAREHOUSE'], isWarehouse: true, volumeL: 0, maxDimCm: 0 }],
+                    totalHours: 0, driverId: w.driverId, driverMax: w.driverMax,
+                    totalVolumeL: 0, maxDimCm: 0, diameterMin: 0,
+                    requiredVehicle: null, assignedVehicle: w.vehicle, vehicleUsagePct: 0,
+                    metrics: { optimizedDriveSec: 0 }
+                });
+                return;
+            }
+
+            recalcDriverTime(driver, matrix, true);
+            const result = finalizeRoute(driver, startingLocation, matrix);
+
+            const stops2 = result.route.filter(s => !s.isWarehouse);
+            const metres = routeDistanceMeters(stops2, distMatrix);
+            const miles = metres / 1609.34;
+            const mpg = MPG[w.vehicle] || MPG_SEDAN;
+            const gallons = mpg > 0 ? miles / mpg : 0;
+            const pk = stops2.reduce((a, s) => a + s.tbas.length, 0);
+            result.mileage = {
+                miles: +miles.toFixed(1),
+                km: +(metres / 1000).toFixed(1),
+                gallons: +gallons.toFixed(2),
+                fuelCost: +(gallons * FUEL_PRICE_PER_GAL).toFixed(2),
+                runningCost: +(miles * COST_PER_MILE).toFixed(2),
+                costPerPackage: pk > 0 ? +((miles * COST_PER_MILE) / pk).toFixed(2) : null
+            };
+            rebuilt.push(result);
+        });
+
+        // Re-check everything, not just what moved.
+        //
+        // Nothing here rejects a move for being over a limit. This is a manual
+        // override: the dispatcher can see something the solver cannot, so the
+        // move always goes through and the consequence is reported instead.
+        let errorCount = 0, warningCount = 0;
+        rebuilt.forEach(r => {
+            r.issues = validateRoute(r, matrix);
+            r.issues.forEach(i => i.severity === 'error' ? errorCount++ : warningCount++);
+        });
+
+        // Remember which routes were touched by hand. The flag has to survive
+        // re-renders, otherwise a manual edit is invisible five seconds later.
+        const touched = new Set([String(move.fromDriverId), String(move.toDriverId)]);
+        rebuilt.forEach(r => {
+            const wasTouched = touched.has(String(r.driverId))
+                || (r.isOverflow && touched.has('OVERFLOW'));
+            const prior = routes.find(x => String(x.driverId) === String(r.driverId));
+            r.manuallyAdjusted = wasTouched || !!(prior && prior.manuallyAdjusted);
+        });
+
+        console.log(`[MOVE] ${movingTbas.length} package(s) from "${move.address}": `
+            + `driver ${move.fromDriverId} -> ${move.toDriverId} | `
+            + `${errorCount} error(s), ${warningCount} warning(s)`);
+
+        res.json({
+            routes: rebuilt,
+            validation: { errors: errorCount, warnings: warningCount },
+            moved: { address: move.address, count: movingTbas.length, tbas: movingTbas }
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: error.message });
+    } finally {
+        resetConfig();
+    }
+});
+
+// The constraint editor pulls its control definitions from here
+app.get('/config-schema', (req, res) => {
+    const vehicleDefaults = {};
+    VEHICLE_SCHEMA.forEach(s => { vehicleDefaults[s.key] = s.def; });
+    res.json({
+        schema: CONFIG_SCHEMA,
+        defaults: DEFAULTS,
+        vehicleSchema: VEHICLE_SCHEMA,
+        vehicleDefaults
+    });
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
