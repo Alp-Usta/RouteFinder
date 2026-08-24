@@ -1,0 +1,8 @@
+node_modules/
+*.osm.pbf
+graph-cache/
+graphhopper-web-*.jar
+logs/
+*_old.js
+public/*_old.html
+.DS_Store

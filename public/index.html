@@ -1,0 +1,3284 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RouteFinder v12 🚀</title>
+
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #121212;
+            margin: 0;
+            padding: 20px;
+            color: #EFEFEF;
+            box-sizing: border-box;
+        }
+        *, *::before, *::after { box-sizing: inherit; }
+
+        .container {
+            /* Fixed width on purpose. Zooming the browser scales the whole box,
+               which is how you get a bigger map or a wider sidebar when you
+               want one. Going fluid took that away. */
+            max-width: 1400px;
+            margin: auto;
+            background: #1E1E1E;
+            border-radius: 12px;
+            border: 1px solid #3B3B3B;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: #282828;
+            color: white;
+            padding: 14px 20px;
+            border-bottom: 1px solid #3B3B3B;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        h1 { margin: 0; font-size: 1.7em; flex: 1; text-align: center; }
+        /* keeps the title optically centred despite the toggle on the left */
+        header::after { content: ""; width: 34px; }
+
+        .sidebar-toggle {
+            width: auto; margin: 0; padding: 6px 11px;
+            background: #3a3a3a; color: #ddd; border: 1px solid #4a4a4a;
+            border-radius: 5px; font-size: 0.95em; line-height: 1; cursor: pointer;
+        }
+        .sidebar-toggle:hover { background: #474747; }
+
+        .main-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            height: 800px;
+            transition: grid-template-columns .18s ease;
+        }
+        .main-layout.sidebar-collapsed { grid-template-columns: 0 1fr; }
+        .main-layout.sidebar-collapsed .sidebar { padding: 0; border-right: none; overflow: hidden; }
+
+        .sidebar {
+            padding: 20px;
+            border-right: 1px solid #3B3B3B;
+            overflow-y: auto;
+            background: #181818;
+        }
+
+        .map-area {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #map {
+            flex: 1;
+            width: 100%;
+            background-color: #242f3e;
+        }
+
+        /* --- DASHBOARD STYLES (NEW) --- */
+        .dashboard-bar {
+            background: #222;
+            border-bottom: 1px solid #444;
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9em;
+            display: none; /* Hidden until calc */
+        }
+        .stat-box {
+            display: flex;
+            gap: 15px;
+        }
+        .stat-item {
+            color: #aaa;
+        }
+        .stat-item strong {
+            color: #fff;
+            font-size: 1.1em;
+        }
+
+        /* Zip Code Dropdown */
+        .zip-dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .zip-btn {
+            background: #333;
+            color: #ddd;
+            border: 1px solid #555;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .zip-btn:hover { background: #444; }
+        .zip-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 35px;
+            background: #222;
+            min-width: 280px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            z-index: 2000;
+            border: 1px solid #444;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .zip-content.show { display: block; }
+        .zip-row {
+            padding: 8px 12px;
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .zip-row:last-child { border-bottom: none; }
+        .zip-tag {
+            font-size: 0.8em;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #fff;
+            margin-left: 5px;
+            font-weight: bold;
+        }
+
+        /* Controls */
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 500; color: #B3B3B3; font-size: 0.9em; }
+        input, select { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; }
+        /* The rule above is meant for text fields. Checkboxes and radios are not
+           text fields: full width and 10px of padding turns them into big blank
+           boxes sitting on top of their own labels. */
+        input[type=checkbox], input[type=radio] {
+            width: auto; padding: 0; margin: 0; flex: none;
+            accent-color: #fca311; cursor: pointer;
+            min-width: 15px; height: 15px;
+        }
+        /* The toggle switch draws its own track and hides the real checkbox,
+           so it has to win over the sizing above. */
+        .switch input[type=checkbox] { opacity: 0; width: 0; height: 0; min-width: 0; position: absolute; }
+        textarea { padding: 10px; border: 1px solid #535353; background-color: #3B3B3B; color: #FFFFFF; border-radius: 6px; width: 100%; box-sizing: border-box; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85em; resize: vertical; }
+        textarea:focus { outline: none; border-color: #fca311; }
+        button { padding: 10px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
+        .btn-action { background-color: #fca311; color: #121212; }
+        .btn-action:hover { background-color: #e89300; }
+        .btn-secondary { background-color: #2a9d8f; color: white; }
+        .btn-auto { background-color: #7209b7; color: white; }
+        .btn-reset { background-color: #444; color: white; margin-bottom: 10px; }
+        .btn-parse { background-color: #3a86ff; color: white; }
+        .btn-parse:hover { background-color: #2667cc; }
+        .btn-clear { background-color: #555; color: #ccc; font-size: 0.85em; }
+
+        .driver-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #333; font-size: 0.9em; background: #222; margin-bottom: 2px; border-radius: 4px; }
+        .btn-remove-driver { background-color: #d90429; color: white; border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-weight: bold; font-size: 1.1em; width: auto; margin: 0; line-height: 1; }
+        .btn-remove-driver:hover { background-color: #ef233c; }
+
+        #driverList { max-height: 180px; overflow-y: auto; margin-top: 5px; background: #181818; border: 1px solid #333; border-radius: 4px; scroll-behavior: smooth; }
+
+        .group-header { background-color: #282828; color: #fff; padding: 10px; cursor: pointer; border: 1px solid #444; border-radius: 6px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .group-header:hover { background-color: #333; }
+        .group-content { display: none; padding-left: 10px; border-left: 2px solid #444; margin-bottom: 10px; }
+        .group-content.active { display: block; }
+
+        .driver-card { background: #222; margin-top: 5px; padding: 10px; border-radius: 4px; cursor: pointer; border: 1px solid #333; transition: transform 0.1s; position: relative; }
+        .driver-card:hover { background: #2a2a2a; border-color: #fca311; }
+        .driver-card.selected { border-color: #fca311; background: #332b00; }
+        .driver-name-header { padding: 4px; border-radius: 4px; transition: background 0.2s; display: inline-block; width: 100%; }
+        .driver-name-header:hover { background-color: #444; }
+
+        .tba-row { font-size: 0.8em; color: #aaa; margin-left: 10px; border-left: 1px solid #444; padding-left: 5px; margin-top: 2px; }
+
+        .scanner-overlay { position: absolute; bottom: 20px; right: 20px; z-index: 1000; background: rgba(0, 0, 0, 0.85); padding: 20px; border-radius: 12px; border: 1px solid #fca311; width: 300px; text-align: center; backdrop-filter: blur(5px); }
+        #scanInput { font-size: 1.2em; text-align: center; border-color: #fca311; }
+        #scanResult { margin-top: 10px; min-height: 60px; }
+
+        footer { background: #181818; padding: 10px; text-align: center; font-size: 0.8em; color: #555; }
+
+        /* === MAPLIBRE MARKERS STYLING === */
+        .driver-marker { display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-shadow: 0 0 2px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.1s; }
+        .driver-marker:hover { transform: scale(1.1); z-index: 999; }
+        .bag-marker { border-width: 3px; font-size: 10px; z-index: 50; }
+
+        .maplibregl-popup-content { background: #222 !important; color: #eee !important; border: 1px solid #555; border-radius: 6px; padding: 10px; font-family: sans-serif; font-size: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.8); }
+        .maplibregl-popup-tip { border-top-color: #222 !important; border-bottom-color: #222 !important; }
+        .maplibregl-popup-close-button { color: #aaa; }
+
+        .input-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
+        .input-tab { flex: 1; padding: 8px; background: #333; border: 1px solid #444; border-radius: 6px 6px 0 0; cursor: pointer; text-align: center; font-size: 0.85em; transition: all 0.2s; }
+        .input-tab:hover { background: #444; }
+        .input-tab.active { background: #3B3B3B; border-bottom-color: #3B3B3B; color: #fca311; }
+        .input-panel { display: none; background: #3B3B3B; padding: 10px; border-radius: 0 0 6px 6px; border: 1px solid #444; border-top: none; }
+        .input-panel.active { display: block; }
+
+        .parse-status { font-size: 0.8em; padding: 8px; border-radius: 4px; margin-top: 8px; }
+        .parse-status.success { background: rgba(42, 157, 143, 0.2); border: 1px solid #2a9d8f; color: #2a9d8f; }
+        .parse-status.error { background: rgba(217, 4, 41, 0.2); border: 1px solid #d90429; color: #d90429; }
+        .help-text { font-size: 0.75em; color: #777; margin-top: 5px; line-height: 1.4; }
+        .help-text code { background: #222; padding: 1px 4px; border-radius: 3px; color: #aaa; }
+
+        /* --- Residential switch --- */
+        .switch-row { display: flex; align-items: center; justify-content: space-between; background: #222; border: 1px solid #383838; border-radius: 6px; padding: 9px 12px; margin-top: 10px; }
+        .switch-label { font-size: 0.85em; color: #ccc; }
+        .switch-label small { display: block; color: #777; font-size: 0.85em; margin-top: 2px; }
+        .switch { position: relative; width: 42px; height: 22px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+        .switch-track { position: absolute; inset: 0; background: #4a4a4a; border-radius: 22px; transition: background .18s; cursor: pointer; }
+        .switch-track::before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform .18s; }
+        .switch input:checked + .switch-track { background: #2a9d8f; }
+        .switch input:checked + .switch-track::before { transform: translateX(20px); }
+        .switch input:focus-visible + .switch-track { outline: 2px solid #fca311; outline-offset: 2px; }
+
+        /* --- Load summary --- */
+        .load-summary { background: #1b1b1b; border: 1px solid #333; border-radius: 6px; padding: 10px; margin-top: 10px; font-size: 0.8em; }
+        .load-row { display: flex; justify-content: space-between; padding: 2px 0; color: #aaa; }
+        .load-row strong { color: #eee; }
+        .cat-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 8px 0 6px; background: #2a2a2a; }
+        .cat-seg { height: 100%; }
+        .cat-legend { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.9em; }
+        .cat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; }
+
+        /* --- Exception buttons --- */
+        .exception-btn { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 9px 12px; margin-top: 8px; border-radius: 6px; border: 1px solid; background: transparent; cursor: pointer; font-size: 0.85em; font-weight: 600; }
+        .exception-btn .count { font-size: 1.15em; }
+        .btn-fc { border-color: #f032e6; color: #f032e6; }
+        .btn-fc:hover { background: rgba(240, 50, 230, 0.12); }
+        .btn-hold { border-color: #fca311; color: #fca311; }
+        .btn-hold:hover { background: rgba(252, 163, 17, 0.12); }
+
+        /* --- Exception page overlay --- */
+        .page-overlay { position: fixed; inset: 0; background: #121212; z-index: 5000; display: none; flex-direction: column; }
+        .page-overlay.show { display: flex; }
+        .page-header { padding: 18px 28px; border-bottom: 1px solid #3B3B3B; display: flex; justify-content: space-between; align-items: center; background: #1c1c1c; }
+        .page-header h2 { margin: 0; font-size: 1.35em; }
+        .page-header .sub { color: #999; font-size: 0.8em; margin-top: 4px; font-weight: normal; }
+        .page-body { flex: 1; overflow-y: auto; padding: 20px 28px; }
+        .page-actions { display: flex; gap: 8px; }
+        .page-actions button { width: auto; padding: 8px 16px; }
+        .btn-close-page { background: #444; color: #eee; }
+        .exc-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        .exc-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #444; color: #888; font-weight: 600; text-transform: uppercase; font-size: 0.85em; letter-spacing: .04em; }
+        .exc-table td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; color: #ddd; }
+        .exc-table tr:hover td { background: #1e1e1e; }
+        .exc-table code { color: #fca311; font-family: 'Consolas', monospace; }
+        .banner { padding: 12px 16px; border-radius: 6px; margin-bottom: 18px; font-size: 0.9em; line-height: 1.5; }
+        .banner-fc { background: rgba(240, 50, 230, 0.1); border: 1px solid #f032e6; color: #f9a8f4; }
+        .banner-hold { background: rgba(252, 163, 17, 0.1); border: 1px solid #fca311; color: #ffd88a; }
+        .empty-state { text-align: center; color: #666; padding: 60px 20px; }
+
+        /* --- Vehicle badges --- */
+        .veh-badge { display: inline-block; font-size: 0.72em; font-weight: 700; padding: 2px 7px; border-radius: 3px; letter-spacing: .03em; vertical-align: middle; }
+        .veh-warn { display: block; margin-top: 5px; font-size: 0.78em; color: #ff6b6b; background: rgba(217,4,41,.12); border-left: 2px solid #d90429; padding: 4px 7px; border-radius: 0 3px 3px 0; }
+        .capacity-meter { height: 5px; background: #2a2a2a; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+        .capacity-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+
+        /* --- Algorithm switch --- */
+        .algo-box { margin-top: 12px; padding: 10px; background: #1b1b1b; border: 1px solid #333; border-radius: 6px; }
+        .algo-toggle { display: flex; gap: 4px; }
+        .algo-opt { flex: 1; padding: 8px 6px; font-size: 0.78em; background: #2a2a2a; color: #aaa; border: 1px solid #3a3a3a; border-radius: 4px; cursor: pointer; margin: 0; font-weight: 600; }
+        .algo-opt:hover { background: #333; color: #ddd; }
+        .algo-opt.active { background: #fca311; color: #121212; border-color: #fca311; }
+        .btn-compare { background: #7209b7; color: #fff; margin-top: 8px; font-size: 0.85em; }
+        .btn-compare:hover { background: #8b1ed4; }
+
+        /* --- Comparison panel --- */
+        .cmp-table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-top: 12px; }
+        .cmp-table th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #444; color: #888; font-size: 0.9em; text-transform: uppercase; letter-spacing: .04em; }
+        .cmp-table td { padding: 8px 10px; border-bottom: 1px solid #2a2a2a; color: #ddd; }
+        .cmp-table td.metric { color: #999; }
+        .cmp-win { color: #2a9d8f; font-weight: bold; }
+        .cmp-lose { color: #aaa; }
+        .cmp-verdict { margin-top: 16px; padding: 12px 14px; border-radius: 6px; background: rgba(42,157,143,.12); border: 1px solid #2a9d8f; color: #7fd8cc; font-size: 0.9em; line-height: 1.5; }
+        .cmp-note { font-size: 0.8em; color: #777; margin-top: 10px; line-height: 1.5; }
+
+        /* --- Optimization metrics --- */
+        .metrics-bar { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: #1b1b1b; border: 1px solid #2a9d8f; border-radius: 6px; margin-bottom: 10px; font-size: 0.85em; }
+        .metrics-big { font-size: 1.5em; font-weight: bold; color: #2a9d8f; line-height: 1; }
+        .metrics-sub { color: #999; font-size: 0.9em; line-height: 1.4; }
+        .metric-cell { text-align: center; }
+        .metrics-info { font-size: 0.78em; color: #3a86ff; cursor: pointer; align-self: flex-start; white-space: nowrap; }
+        .metrics-info:hover { text-decoration: underline; }
+        .undo-bar { display: flex; align-items: center; gap: 10px; padding: 7px 12px; margin-bottom: 10px;
+                    background: #1b1b1b; border: 1px solid #3a4a5a; border-radius: 6px;
+                    font-size: 0.82em; color: #9dc4ff; }
+        .undo-bar span { flex: 1; min-width: 0; }
+        .btn-undo { width: auto; padding: 5px 12px; font-size: 0.85em; background: #2a3a4a;
+                    color: #cfe3ff; border: 1px solid #3a5a7a; border-radius: 4px; }
+        .btn-undo:hover { background: #35485c; }
+        .manual-badge { display: inline-block; font-size: 0.72em; color: #9dc4ff; margin-top: 4px;
+                        background: rgba(58,134,255,.12); border: 1px solid #3a5a7a;
+                        padding: 2px 7px; border-radius: 3px; }
+        .manual-badge-over { color: #ffcf80; background: rgba(252,163,17,.12); border-color: #7a5a2a; }
+        .route-mileage { font-size: 0.78em; color: #888; margin-top: 3px; }
+        .route-mileage strong { color: #ccc; }
+        .cost-dim { color: #666; }
+        .vb-remote { background: rgba(58,134,255,.12); border: 1px solid #3a86ff; color: #9dc4ff; }
+        .issue-card-remote { border-left: 4px solid #3a86ff; }
+        .issue-remote { background: rgba(58,134,255,.10); border-left: 3px solid #3a86ff; color: #9dc4ff; }
+        .ovf-head { display: flex; align-items: baseline; gap: 8px; }
+        .ovf-head .eta-move { margin-left: auto; }
+        .eta-move { color: #fca311; font-size: 0.9em; cursor: pointer; padding-left: 8px; }
+        .eta-move:hover { text-decoration: underline; }
+        .move-section { margin-bottom: 20px; }
+        .move-label { font-size: 0.85em; color: #888; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+        .move-selectall { color: #3a86ff; font-size: 0.9em; cursor: pointer; text-transform: none; letter-spacing: 0; }
+        .move-selectall:hover { text-decoration: underline; }
+        .move-hint { color: #666; font-size: 0.85em; font-weight: normal; text-transform: none; letter-spacing: 0; }
+        .move-choice { display: flex; gap: 10px; flex-wrap: wrap; }
+        .move-radio { display: flex; align-items: flex-start; gap: 10px; flex: 1 1 220px;
+                      padding: 12px 14px; background: #1b1b1b; border: 1px solid #333;
+                      border-radius: 6px; cursor: pointer; font-size: 0.9em; color: #ddd; }
+        .move-radio > input[type=radio] { flex: 0 0 15px; margin-top: 2px; }
+        .move-radio-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .move-radio .move-name { font-weight: 600; }
+        .move-radio:hover { border-color: #555; }
+        .move-radio.disabled { opacity: .45; cursor: not-allowed; }
+        .move-pkg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+                         gap: 4px; max-height: 280px; overflow-y: auto; padding: 10px;
+                         background: #1b1b1b; border: 1px solid #333; border-radius: 6px; }
+        .move-pkg { display: grid; grid-template-columns: 16px 1fr; align-items: center; gap: 9px;
+                    font-size: 0.82em; color: #bbb; cursor: pointer; padding: 6px 8px;
+                    border-radius: 4px; font-variant-numeric: tabular-nums; }
+        .move-pkg:hover { color: #fff; background: #242424; }
+        .move-pkg.picked { background: rgba(252,163,17,.12); color: #ffcf80; }
+        .move-pkg span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .move-targets { display: flex; flex-direction: column; gap: 7px; }
+        .move-target { display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+                       background: #1b1b1b; border: 1px solid #333; border-radius: 6px;
+                       cursor: pointer; flex-wrap: wrap; }
+        .move-target-main { display: flex; align-items: baseline; gap: 9px; flex: 1 1 auto;
+                            min-width: 0; flex-wrap: wrap; }
+        .move-near { color: #7fd8cc; font-size: 0.8em; white-space: nowrap; }
+        .move-near.far { color: #c98b8b; }
+        .move-search { width: 100%; margin-bottom: 8px; padding: 9px 12px; font-size: 0.88em; }
+        .move-pkg-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+        .move-pkg-actions button { width: auto; padding: 5px 12px; font-size: 0.78em;
+                                   background: #2a2a2a; color: #ccc; border: 1px solid #444; }
+        .move-map { height: 230px; border-radius: 6px; overflow: hidden; border: 1px solid #333; }
+        .move-target:hover { border-color: #555; background: #222; }
+        .move-target.chosen { border-color: #fca311; background: rgba(252,163,17,.10); }
+        .move-dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+        .move-target-name { font-weight: bold; color: #eee; font-size: 0.92em; }
+        .move-target-meta { color: #888; font-size: 0.8em; }
+        .move-target-flag { color: #2a9d8f; font-size: 0.75em; }
+        .move-error { color: #ff8a9c; font-size: 0.88em; margin-bottom: 12px; }
+        .move-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 4000; padding: 12px 20px; border-radius: 8px; font-size: 0.9em; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+        .toast-ok { background: #14312d; border: 1px solid #2a9d8f; color: #7fd8cc; }
+        .toast-warn { background: #33280f; border: 1px solid #fca311; color: #ffcf80; }
+        .toast-error { background: #34121a; border: 1px solid #d90429; color: #ff8a9c; }
+        .doc-p { color: #ccc; font-size: 0.9em; line-height: 1.65; max-width: 640px; margin: 6px 0 16px; }
+
+        /* --- Per-stop ETA list --- */
+        .eta-row { display: flex; align-items: baseline; gap: 8px; font-size: 0.8em; padding: 3px 0 3px 8px; border-left: 1px solid #444; margin-top: 2px; }
+        .eta-time { color: #fca311; font-weight: bold; font-variant-numeric: tabular-nums; min-width: 52px; }
+        .eta-where { color: #ccc; }
+        .eta-count { color: #777; font-size: 0.9em; }
+        .eta-tbas { color: #666; font-size: 0.92em; padding-left: 62px; margin-bottom: 4px; word-break: break-all; line-height: 1.5; }
+        .eta-elapsed { color: #777; font-size: 0.9em; }
+        .eta-toggle { color: #3a86ff; font-size: 0.9em; cursor: pointer; margin-left: auto; padding-left: 8px; }
+        .eta-toggle:hover { text-decoration: underline; }
+        .depart-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 7px 10px; background: #1b1b1b; border: 1px solid #333; border-radius: 6px; }
+        .depart-row label { color: #999; flex-shrink: 0; }
+        .depart-row input[type=time] { width: auto; flex: 1; padding: 5px 8px; font-size: 0.85em; }
+
+        /* --- Validation warnings --- */
+        .issue { font-size: 0.78em; padding: 5px 8px; border-radius: 0 3px 3px 0; margin-top: 4px; line-height: 1.4; }
+        .issue-error { background: rgba(217,4,41,.14); border-left: 3px solid #d90429; color: #ff8a9c; }
+        .issue-warning { background: rgba(252,163,17,.12); border-left: 3px solid #fca311; color: #ffcf80; }
+        .validation-banner { padding: 9px 12px; border-radius: 6px; margin-bottom: 10px; font-size: 0.85em; font-weight: 600; }
+        .vb-error { background: rgba(217,4,41,.15); border: 1px solid #d90429; color: #ff8a9c; }
+        .vb-warning { background: rgba(252,163,17,.12); border: 1px solid #fca311; color: #ffcf80; }
+        .vb-ok { background: rgba(42,157,143,.12); border: 1px solid #2a9d8f; color: #7fd8cc; }
+        .validation-banner.clickable { cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .validation-banner.clickable:hover { filter: brightness(1.25); }
+        .banner-cta { font-size: 0.85em; opacity: .85; white-space: nowrap; }
+        .issue-card { border: 1px solid #333; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; background: #1b1b1b; }
+        .issue-card-error { border-left: 4px solid #d90429; }
+        .issue-card-warning { border-left: 4px solid #fca311; }
+        .issue-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+        .issue-card-stops { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .issue-stop { font-size: 0.78em; color: #bbb; background: #242424; padding: 3px 8px; border-radius: 3px; }
+        .issue-focus { margin-top: 10px; width: auto; padding: 6px 14px; font-size: 0.8em; }
+
+        /* --- Constraint editor --- */
+        .cfg-group { margin-bottom: 18px; }
+        .cfg-group h3 { font-size: 0.95em; color: #fca311; margin: 0 0 8px; padding-bottom: 5px; border-bottom: 1px solid #333; }
+        .cfg-row { display: grid; grid-template-columns: 1fr 130px 118px; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid #262626; }
+        .cfg-label { font-size: 0.87em; color: #ddd; }
+        .cfg-help { font-size: 0.78em; color: #777; margin-top: 2px; line-height: 1.4; }
+        .cfg-row input[type=range] { width: 100%; accent-color: #fca311; }
+        .cfg-val { font-size: 0.85em; color: #fca311; font-weight: bold; text-align: right; font-variant-numeric: tabular-nums; }
+        .cfg-val.changed::after { content: " *"; color: #2a9d8f; }
+        .cfg-entry { display: flex; align-items: center; gap: 5px; }
+        .cfg-num { width: 68px; padding: 6px 7px; font-size: 0.85em; text-align: right; background: #2a2a2a; border: 1px solid #444; color: #eee; border-radius: 4px; font-variant-numeric: tabular-nums; }
+        .cfg-num:focus { outline: none; border-color: #fca311; }
+        .cfg-num.changed { border-color: #2a9d8f; color: #7fd8cc; }
+        .cfg-num.cfg-clamped { border-color: #d90429; background: rgba(217,4,41,.15); }
+        .cfg-unit { font-size: 0.78em; color: #777; min-width: 22px; }
+        .veh-block { border: 1px solid #2e2e2e; border-radius: 6px; padding: 4px 12px 8px; margin-bottom: 12px; background: #1a1a1a; }
+        .veh-head { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0 6px; border-bottom: 1px solid #2e2e2e; margin-bottom: 4px; }
+        .veh-head span:first-child { font-weight: bold; color: #fca311; font-size: 0.9em; letter-spacing: .04em; }
+        .veh-usable { font-size: 0.8em; color: #7fd8cc; font-variant-numeric: tabular-nums; }
+        .cfg-actions { display: flex; gap: 8px; margin-top: 4px; }
+        .cfg-actions button { width: auto; padding: 9px 18px; }
+        .btn-cfg { background: #2a2a2a; color: #ddd; border: 1px solid #444; font-size: 0.85em; }
+        .btn-cfg:hover { background: #333; }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <button class="sidebar-toggle" id="sidebarToggle" title="Hide or show the side panel">&#9664;</button>
+            <h1>RouteFinder v12 🚀</h1>
+        </header>
+
+        <div class="main-layout">
+            <div class="sidebar">
+                <div id="controls">
+                    <div class="form-group">
+                        <label>1. Packages</label>
+                        
+                        <div class="input-tabs">
+                            <div class="input-tab active" data-tab="text">📝 Text Input</div>
+                            <div class="input-tab" data-tab="file">📁 File Upload</div>
+                        </div>
+
+                        <div class="input-panel active" id="textPanel">
+                            <textarea id="textInput" rows="8" placeholder="Paste packages here...
+Format Examples:
+TBA123456789,19010
+TBA987654321,19020"></textarea>
+                            <div class="help-text">
+                                <strong>Loose:</strong> <code>TBA,ZIP</code> one per line<br>
+                                <strong>Bag:</strong> Name on its own line, then TBAs below it<br>
+                                <strong>End bag:</strong> Double blank line or new bag name
+                            </div>
+                            <div style="display: flex; gap: 5px; margin-top: 8px;">
+                                <button id="parseText" class="btn-parse">Parse Input</button>
+                                <button id="clearText" class="btn-clear" style="width: 80px;">Clear</button>
+                            </div>
+                            <div id="parseStatus"></div>
+                        </div>
+
+                        <div class="input-panel" id="filePanel">
+                            <input type="file" id="csvFile" accept=".csv" multiple>
+                            <div id="fileInfo" style="font-size:0.8em; color:#aaa; margin-top:5px;"></div>
+                            <label style="margin-top:10px; font-size:0.8em; color:#9b5de5;">+ Upload Bags (Optional)</label>
+                            <input type="file" id="bagFile" accept=".csv" multiple>
+                            <div id="bagList" style="margin-top:5px; font-size:0.8em; color:#ccc;"></div>
+                        </div>
+
+                        <div class="switch-row">
+                            <span class="switch-label">
+                                Residential only
+                                <small>Route houses only. Blank counts as residential.</small>
+                            </span>
+                            <label class="switch">
+                                <input type="checkbox" id="residentialOnly">
+                                <span class="switch-track"></span>
+                            </label>
+                        </div>
+
+                        <div id="loadSummary"></div>
+                        <div id="exceptionButtons"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>2. Fleet</label>
+                        <div style="display:flex; gap:5px;">
+                            <select id="autoMaxBlock">
+                                <option value="2">Max: 2h</option>
+                                <option value="2.5">Max: 2.5h</option>
+                                <option value="3">Max: 3h</option>
+                                <option value="3.5">Max: 3.5h</option>
+                                <option value="4" selected>Max: 4h</option>
+                            </select>
+                            <select id="autoVehicle" title="Largest vehicle available to the fleet">
+                                <option value="SEDAN">Sedans only</option>
+                                <option value="SUV" selected>Up to SUV</option>
+                                <option value="TRUCK">Up to truck</option>
+                            </select>
+                        </div>
+                        <button id="autoPlan" class="btn-auto">Auto-Plan</button>
+                        <button id="findRoutes" class="btn-action">Calculate</button>
+
+                        <div class="algo-box">
+                            <label style="margin-bottom:6px;">Routing algorithm</label>
+                            <div class="algo-toggle">
+                                <button class="algo-opt active" data-algo="greedy">Greedy seed-and-grow</button>
+                                <button class="algo-opt" data-algo="cluster">Cluster first</button>
+                            </div>
+                            <button id="openConstraints" class="btn-cfg" style="width:100%; margin-top:8px;">Constraint editor</button>
+                        <div class="help-text" id="algoHelp">
+                                Grows each route outward from a seed stop. Original engine.
+                            </div>
+                            <button id="compareAlgos" class="btn-compare">Run both &amp; compare</button>
+                        </div>
+                    </div>
+
+                    <details open style="margin-bottom: 15px; border: 1px solid #333; padding: 5px; border-radius: 4px;">
+                        <summary style="cursor:pointer; font-size:0.9em; color:#aaa;">Manual Driver Add</summary>
+                        <div style="display:flex; gap:5px; margin-top:5px;">
+                            <select id="blockTime">
+                                <option value="2">2h</option>
+                                <option value="2.5">2.5h</option>
+                                <option value="3">3h</option>
+                                <option value="3.5">3.5h</option>
+                                <option value="4">4h</option>
+                            </select>
+                            <select id="driverVehicle">
+                                <option value="SEDAN">Sedan</option>
+                                <option value="SUV" selected>SUV</option>
+                                <option value="TRUCK">Truck</option>
+                            </select>
+                            <button id="addDriver" class="btn-secondary" style="width:auto; padding:10px 14px;">+ Add</button>
+                        </div>
+                        <div style="font-size: 0.7em; color: #666; margin-top: 3px; text-align: right;">
+                            Shortcuts: (=) Add, (-) Remove
+                        </div>
+                        <div id="driverList"></div>
+                    </details>
+                </div>
+
+                <div id="resultsArea" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <h3 style="margin:0;">Routes</h3>
+                        <button class="btn-reset" onclick="resetMapFilter()" style="width:auto; padding:5px 10px; font-size:0.8em;">Show All Map</button>
+                    </div>
+                    <div class="depart-row">
+                        <label for="departTime" style="margin:0; font-size:0.8em;">Leaves warehouse at</label>
+                        <input type="time" id="departTime" value="10:00">
+                    </div>
+                    <div style="display:flex; gap:6px; margin-bottom:10px;">
+                        <button id="recalcBtn" class="btn-action" style="font-size:0.85em;">Recalculate</button>
+                        <button class="btn-clear" onclick="clearPlan()" style="width:110px;">Clear plan</button>
+                    </div>
+                    <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy • Click Card to Filter</div>
+                    <div id="undoBar"></div>
+                    <div id="remoteNotice"></div>
+                    <div id="validationBanner"></div>
+                    <div id="metricsBar"></div>
+                    <div id="routeList"></div>
+                    <div style="margin-top:20px;">
+                        <button id="exportScannerCsv" class="btn-secondary">Export Lookup CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="map-area">
+                <div id="dashboard" class="dashboard-bar">
+                    <div class="stat-box">
+                        <div class="stat-item"><strong id="statRoutes">0</strong> Routes</div>
+                        <div class="stat-item"><strong id="statPkgs">0</strong> Packages</div>
+                        <div class="stat-item"><strong id="statStops">0</strong> Locations</div>
+                        <div class="stat-item"><strong id="statVolume">0</strong> L loaded</div>
+                        <div class="stat-item" id="statVehicleMix"></div>
+                    </div>
+                    <div class="zip-dropdown">
+                        <button class="zip-btn" onclick="toggleZipMenu()">📍 Zip Code Breakdown ▼</button>
+                        <div id="zipMenu" class="zip-content"></div>
+                    </div>
+                </div>
+
+                <div id="map"></div>
+
+                <div id="scanPanel" class="scanner-overlay" style="display:none;">
+                    <div style="font-weight:bold; color:#fca311; margin-bottom:5px;">SCANNER READY</div>
+                    <input type="text" id="scanInput" placeholder="Scan Barcode (Last 4)...">
+                    <div id="scanResult">
+                        <div id="driverDisplay" style="font-size: 40px; font-weight: bold; color: #fff;">--</div>
+                        <div id="stopDisplay" style="font-size: 16px; color: #aaa;">Waiting...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="movePage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#fca311;" id="moveTitle">Move packages</h2>
+                    <div class="sub" id="moveSub"></div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('movePage')">Cancel</button>
+                    <button class="btn-action" style="width:auto; padding:8px 16px;" id="moveApply" disabled>Move packages</button>
+                </div>
+            </div>
+            <div class="page-body">
+                <div id="moveError" class="move-error"></div>
+                <div id="moveBody"></div>
+            </div>
+        </div>
+
+        <div id="remotePage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#3a86ff;">Areas on their own</h2>
+                    <div class="sub">Far from base, or with no neighbouring stop</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('remotePage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="remoteBody"></div></div>
+        </div>
+
+        <div id="costPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#2a9d8f;">How mileage and cost are worked out</h2>
+                    <div class="sub">And what the numbers do not include</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('costPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body">
+                <h3 style="color:#eee; font-size:1.05em; margin-top:0;">Miles</h3>
+                <p class="doc-p">
+                    Road distance from the routing engine, not straight lines. The drive out from the
+                    warehouse plus every leg between stops. It ends at the last delivery, because that
+                    is where the block ends. Nothing here assumes a drive back.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">Gas</h3>
+                <p class="doc-p">
+                    Miles divided by the MPG for that vehicle class, times the fuel price. This is the
+                    money that actually leaves the driver's pocket on the day. A truck doing 17 will
+                    cost noticeably more over the same route than a sedan doing 32, which is worth
+                    seeing before you decide who takes which route.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">All-in</h3>
+                <p class="doc-p">
+                    A separate, larger figure: miles times a per-mile rate meant to cover everything the
+                    driving costs, not just gas. Tyres, servicing, and the value the vehicle loses by
+                    being driven. The default is the IRS business mileage rate.
+                </p>
+                <p class="doc-p">
+                    The two are not additive. All-in already includes the gas. They sit side by side
+                    because they answer different questions: gas is what today costs, all-in is closer
+                    to what the miles are really worth.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">Why there is no fleet total</h3>
+                <p class="doc-p">
+                    The useful comparison is one route against another, so you can see which driver
+                    drew the expensive run and move work off it. A total across the fleet hides exactly
+                    that. Every figure here is per route.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">What is left out</h3>
+                <p class="doc-p">
+                    Driver pay, tolls and parking. Also any drive home after the last stop, which is the
+                    driver's own trip and nothing to do with the block. These are estimates for comparing
+                    routes, not accounting figures.
+                </p>
+            </div>
+        </div>
+
+        <div id="issuePage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#fca311;">Routes to check</h2>
+                    <div class="sub">Only the routes that tripped a safety check</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('issuePage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="issueBody"></div></div>
+        </div>
+
+        <div id="metricsPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#2a9d8f;">How the savings are measured</h2>
+                    <div class="sub">Two comparisons, two different questions</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('metricsPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body">
+                <h3 style="color:#eee; font-size:1.05em; margin-top:0;">What it compares</h3>
+                <p class="doc-p">
+                    The baseline is what you would get with no software: take the manifest top to bottom,
+                    split it into equal piles, one per driver, and send everyone out. Each pile is then
+                    sequenced the same way a real route is, since the Flex app would reorder the stops
+                    anyway. That removes stop ordering from the comparison entirely.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">Why the headline is a problem count, not a percentage</h3>
+                <p class="doc-p">
+                    Manifests usually arrive sorted by tracking or ZIP, and ZIPs are already roughly
+                    geographic, so chopping one into even piles can land surprisingly close on raw drive
+                    time. Judging the plan on drive time alone would therefore flatter the baseline.
+                </p>
+                <p class="doc-p">
+                    The catch is that those piles are not dispatchable. Nothing checks whether a pile fits
+                    the block, fits the vehicle, or contains an item too long for the trunk. The headline
+                    counts how many of those piles would fail before dispatch. This plan is built to score
+                    zero, and the drive time is reported alongside so you can see both.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">Like for like</h3>
+                <p class="doc-p">
+                    Only stops that actually got assigned are counted. If packages ended up unassigned, the
+                    baseline is built from the same delivered stops, so the plan gets no credit for skipping
+                    work it could not fit.
+                </p>
+
+                <h3 style="color:#eee; font-size:1.05em;">What is left out</h3>
+                <p class="doc-p">
+                    Drive time only. Service time is excluded, since handing over packages takes the same
+                    time no matter how the route was planned.
+                </p>
+                <p class="doc-p" style="color:#888;">
+                    Routes are still internally resequenced with 2-opt before the drive time is measured.
+                    That keeps the time estimates, ETAs and constraint checks realistic. It is simply not
+                    counted as a saving, because the Flex app would reorder the stops anyway.
+                </p>
+            </div>
+        </div>
+
+        <div id="moveToast" class="move-toast" style="display:none;"></div>
+
+        <div id="cfgPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#fca311;">Constraint editor</h2>
+                    <div class="sub">Applies to the next calculation. Nothing is saved permanently.</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-cfg" onclick="resetConstraints()">Reset to defaults</button>
+                    <button class="btn-action" style="width:auto; padding:8px 16px;" onclick="closePage('cfgPage')">Done</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="cfgBody"></div></div>
+        </div>
+
+        <div id="cmpPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#7209b7;">Algorithm comparison</h2>
+                    <div class="sub">Same packages, same fleet, both planners</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('cmpPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="cmpBody"></div></div>
+        </div>
+
+        <div id="fcPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#f032e6;">Fulfillment Center Returns</h2>
+                    <div class="sub">Not assigned to any driver &mdash; these ship back to the FC</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-secondary" onclick="exportExceptions('fc')">Export CSV</button>
+                    <button class="btn-close-page" onclick="closePage('fcPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="fcBody"></div></div>
+        </div>
+
+        <div id="holdPage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#fca311;">Held: Non-Residential</h2>
+                    <div class="sub">Excluded because <em>Residential only</em> is on</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-secondary" onclick="exportExceptions('hold')">Export CSV</button>
+                    <button class="btn-close-page" onclick="closePage('holdPage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="holdBody"></div></div>
+        </div>
+
+        <footer>
+            &copy; 2025 RouteFinder - Developed by Alp Usta - Amazon @ustaseza
+        </footer>
+    </div>
+
+    <script>
+        // STATE
+        let map;
+        let mapLayers = []; 
+        let loosePackages = [];
+        let bagFiles = [];
+        let drivers = [];
+        let allCalculatedRoutes = [];
+        let tbaLookup = {};
+        let allParsedLoose = [];   // pre-screening, so toggling residential re-filters
+        let allParsedBags = [];
+        let fcReturns = [];        // destination is a station/FC code
+        let addressHolds = [];     // non-residential while the switch is on
+        let serverVehicleTiers = null;
+        let currentAlgorithm = 'greedy';
+        let exceptionLookup = {};   // TBA -> screened-out package (FC / hold)
+        let configSchema = null;    // constraint editor definitions from the server
+        let configDefaults = {};
+        let configOverrides = {};   // only the values the user actually changed
+        let vehicleSchema = null;
+        let vehicleDefaults = {};
+        let flaggedRoutes = [];     // routes carrying validation issues
+        let remoteStops = [];       // isolated / far-out stops flagged before planning
+        let lastFleetMetrics = null;
+
+        const ALGO_HELP = {
+            greedy:  'Grows each route outward from a seed stop. Original engine.',
+            cluster: 'Splits the map into compact groups first, then hands each group to a driver.'
+        };
+
+        // The server puts the warehouse at route[0]. Overflow routes don't have
+        // one, so never go looking for it by position. That bug cost a while.
+        function isWarehouse(s) {
+            return s.isWarehouse === true ||
+                   (s.tbas && s.tbas.length === 1 && s.tbas[0] === 'WAREHOUSE');
+        }
+
+        // Package sizing. These mirror the constants in server.js, so if you
+        // change them there change them here too.
+        const PACKING_EFFICIENCY = 0.68;
+
+        const VEHICLE_TIERS = [
+            { id: 'SEDAN', label: 'Sedan', zones: { trunk: 425, rearSeat: 280, frontPassenger: 95 }, maxDimCm: 120, color: '#4ecdc4' },
+            { id: 'SUV',   label: 'SUV',   zones: { trunk: 1000, rearSeat: 350, frontPassenger: 95 }, maxDimCm: 180, color: '#fca311' },
+            { id: 'TRUCK', label: 'Truck / Cargo Van', zones: { trunk: 3000, rearSeat: 400, frontPassenger: 95 }, maxDimCm: 250, color: '#f032e6' }
+        ];
+        const TIER_BY_ID = {};
+        VEHICLE_TIERS.forEach(t => {
+            const gross = t.zones.trunk + t.zones.rearSeat + t.zones.frontPassenger;
+            TIER_BY_ID[t.id] = { ...t, usableL: Math.round(gross * PACKING_EFFICIENCY) };
+        });
+
+        // Envelopes squash into gaps, so they're charged a fraction of their cubic
+        const FLAT_MAX_MIN_DIM_CM = 6;
+        const FLAT_MAX_VOLUME_L = 6;
+        const FLAT_VOLUME_FACTOR = 0.25;
+        const SIZE_SMALL_MAX = 15, SIZE_MEDIUM_MAX = 50, SIZE_LARGE_MAX = 120;
+
+        const CATEGORY_COLORS = {
+            FLAT: '#6c757d', SMALL: '#4ecdc4', MEDIUM: '#3a86ff',
+            LARGE: '#fca311', OVERSIZE: '#d90429', UNKNOWN: '#555'
+        };
+
+        // Parse a dimension off the manifest. Copes with "22.30 cm", "22.30cm",
+        // "8.78 in" and bare numbers. Always returns centimetres.
+        function parseDimension(raw) {
+            if (raw === undefined || raw === null) return NaN;
+            const s = raw.toString().trim().toLowerCase();
+            if (!s) return NaN;
+            const num = parseFloat(s.replace(/[^0-9.\-]/g, ''));
+            if (!isFinite(num)) return NaN;
+            if (s.includes('in') || s.includes('"')) return num * 2.54;
+            if (s.includes('mm')) return num / 10;
+            return num;
+        }
+
+        function computePackageVolume(lengthRaw, widthRaw, heightRaw) {
+            const L = parseDimension(lengthRaw), W = parseDimension(widthRaw), H = parseDimension(heightRaw);
+            if (!isFinite(L) || !isFinite(W) || !isFinite(H) || L <= 0 || W <= 0 || H <= 0) {
+                return { cubicL: 0, effectiveL: 0, maxDimCm: 0, category: 'UNKNOWN' };
+            }
+            const cubicL = (L * W * H) / 1000;
+            const maxDimCm = Math.max(L, W, H);
+            const minDimCm = Math.min(L, W, H);
+            const isFlat = minDimCm <= FLAT_MAX_MIN_DIM_CM && cubicL <= FLAT_MAX_VOLUME_L;
+            let category;
+            if (isFlat) category = 'FLAT';
+            else if (cubicL <= SIZE_SMALL_MAX) category = 'SMALL';
+            else if (cubicL <= SIZE_MEDIUM_MAX) category = 'MEDIUM';
+            else if (cubicL <= SIZE_LARGE_MAX) category = 'LARGE';
+            else category = 'OVERSIZE';
+            return {
+                cubicL: +cubicL.toFixed(2),
+                effectiveL: +(isFlat ? cubicL * FLAT_VOLUME_FACTOR : cubicL).toFixed(2),
+                maxDimCm: +maxDimCm.toFixed(1),
+                category
+            };
+        }
+
+        function smallestVehicleFor(volumeL, maxDimCm) {
+            for (const t of VEHICLE_TIERS) {
+                const tier = TIER_BY_ID[t.id];
+                if (volumeL <= tier.usableL && maxDimCm <= tier.maxDimCm) return t.id;
+            }
+            return null;
+        }
+
+        function isCustomerDestination(dest) {
+            if (dest === undefined || dest === null) return true;
+            const d = dest.toString().trim();
+            return d === '' || d.toUpperCase() === 'CUSTOMER_ADDRESS';
+        }
+
+        function isResidentialAddress(addrType) {
+            if (addrType === undefined || addrType === null) return true;
+            const a = addrType.toString().trim();
+            return a === '' || a.toUpperCase() === 'RESIDENTIAL';
+        }
+
+        // CSV splitter that respects quoted fields. A plain .split(',') breaks
+        // the moment an address has a comma in it.
+        function splitCsvLine(line) {
+            const out = [];
+            let cur = '', inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+                const c = line[i];
+                if (inQuotes) {
+                    if (c === '"') {
+                        if (line[i + 1] === '"') { cur += '"'; i++; }
+                        else inQuotes = false;
+                    } else cur += c;
+                } else {
+                    if (c === '"') inQuotes = true;
+                    else if (c === ',') { out.push(cur); cur = ''; }
+                    else cur += c;
+                }
+            }
+            out.push(cur);
+            return out.map(s => s.trim());
+        }
+
+        // Amazon's exports don't always use the same column names, so match on
+        // any of these rather than one exact string.
+        const HEADER_ALIASES = {
+            tba: ['tba', 'tracking id', 'trackingid', 'tracking_id', 'tracking number', 'scannable id'],
+            postal: ['postal', 'zip', 'zipcode', 'zip code', 'postal code', 'postcode'],
+            destination: ['destination', 'dest', 'destination type'],
+            addressType: ['address type', 'addresstype', 'address_type'],
+            length: ['package length', 'length', 'pkg length'],
+            width: ['package width', 'width', 'pkg width'],
+            height: ['package height', 'height', 'pkg height'],
+            weight: ['package weight', 'weight', 'pkg weight']
+        };
+
+        function mapHeaders(headerCells) {
+            const norm = headerCells.map(h => h.replace(/^\uFEFF/, '').trim().toLowerCase());
+            const idx = {};
+            Object.keys(HEADER_ALIASES).forEach(field => {
+                idx[field] = -1;
+                for (const alias of HEADER_ALIASES[field]) {
+                    const found = norm.indexOf(alias);
+                    if (found !== -1) { idx[field] = found; break; }
+                }
+            });
+            return idx;
+        }
+
+        // UNIQUE COLOR PALETTE
+        const DRIVER_COLORS = [
+            '#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231',
+            '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe',
+            '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000',
+            '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080',
+            '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
+            '#dfe6e9', '#fd79a8', '#00b894', '#e17055', '#0984e3'
+        ];
+
+        // INIT MAP
+        function initMap() {
+            map = new maplibregl.Map({
+                container: 'map',
+                style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                center: [-75.305, 40.101],
+                zoom: 9,
+                pitch: 40,
+                bearing: 0,
+                antialias: true
+            });
+            map.addControl(new maplibregl.NavigationControl());
+        }
+        window.onload = () => {
+            initMap();
+            renderExceptions();
+            renderLoadSummary();
+        };
+
+        // TABS
+        document.querySelectorAll('.input-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.input-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.input-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab + 'Panel').classList.add('active');
+            });
+        });
+
+        // PARSERS
+        function parseTextInput(text) {
+            const lines = text.split('\n');
+            const parsed = { loosePackages: [], bags: [] };
+            let currentBag = null;
+            let emptyLineCount = 0;
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line === '') {
+                    emptyLineCount++;
+                    if (emptyLineCount >= 2 && currentBag) {
+                        if (currentBag.items.length > 0) parsed.bags.push(currentBag);
+                        currentBag = null;
+                    }
+                    continue;
+                }
+                emptyLineCount = 0;
+                const isTbaLine = line.includes(',') && /TBA\d+/i.test(line);
+
+                if (isTbaLine) {
+                    const parts = line.split(',');
+                    if (parts.length >= 2) {
+                        const tba = parts[0].trim().toUpperCase();
+                        const postal = parts[1].trim();
+                        if (tba && postal) {
+                            if (currentBag) currentBag.items.push({ tba, postal });
+                            else parsed.loosePackages.push({ tba, postal });
+                        }
+                    }
+                } else {
+                    if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+                    currentBag = { name: line, items: [] };
+                }
+            }
+            if (currentBag && currentBag.items.length > 0) parsed.bags.push(currentBag);
+            return parsed;
+        }
+
+        document.getElementById('parseText').addEventListener('click', () => {
+            const text = document.getElementById('textInput').value;
+            const statusEl = document.getElementById('parseStatus');
+            if (!text.trim()) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No input to parse';
+                return;
+            }
+            const parsed = parseTextInput(text);
+            allParsedLoose = parsed.loosePackages;
+            allParsedBags = parsed.bags;
+            const total = parsed.loosePackages.length + parsed.bags.reduce((s, b) => s + b.items.length, 0);
+            if (total === 0) {
+                statusEl.className = 'parse-status error';
+                statusEl.textContent = '⚠️ No valid packages found.';
+            } else {
+                statusEl.className = 'parse-status success';
+                statusEl.textContent = `✓ Loaded ${total} packages`;
+                document.getElementById('fileInfo').textContent = `${total} pkgs from text`;
+                rescreenAll();
+            }
+        });
+
+        document.getElementById('clearText').addEventListener('click', () => {
+            document.getElementById('textInput').value = '';
+            document.getElementById('parseStatus').innerHTML = '';
+            allParsedLoose = []; allParsedBags = [];
+            document.getElementById('fileInfo').textContent = '';
+            rescreenAll();
+        });
+
+        // Toggling the switch re-screens what is already loaded -- no re-upload
+        document.getElementById('residentialOnly').addEventListener('change', rescreenAll);
+
+        // Handles both the old tba/postal CSV and the newer export with
+        // Destination, Address Type and dimensions.
+        function parseCSV(csvText) {
+            const lines = csvText.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+            if (lines.length < 2) return null;
+
+            const idx = mapHeaders(splitCsvLine(lines[0]));
+            if (idx.tba === -1 || idx.postal === -1) return null;
+
+            const pkgs = [];
+            for (let i = 1; i < lines.length; i++) {
+                const d = splitCsvLine(lines[i]);
+                const tba = (d[idx.tba] || '').toUpperCase();
+                const postal = (d[idx.postal] || '').trim();
+                if (!tba || !postal) continue;
+
+                const vol = computePackageVolume(
+                    idx.length !== -1 ? d[idx.length] : null,
+                    idx.width  !== -1 ? d[idx.width]  : null,
+                    idx.height !== -1 ? d[idx.height] : null
+                );
+
+                pkgs.push({
+                    tba,
+                    postal,
+                    destination: idx.destination !== -1 ? (d[idx.destination] || '') : '',
+                    addressType: idx.addressType !== -1 ? (d[idx.addressType] || '') : '',
+                    lengthCm: parseDimension(idx.length !== -1 ? d[idx.length] : null) || 0,
+                    widthCm:  parseDimension(idx.width  !== -1 ? d[idx.width]  : null) || 0,
+                    heightCm: parseDimension(idx.height !== -1 ? d[idx.height] : null) || 0,
+                    weight:   idx.weight !== -1 ? (d[idx.weight] || '') : '',
+                    cubicL: vol.cubicL,
+                    volumeL: vol.effectiveL,
+                    maxDimCm: vol.maxDimCm,
+                    category: vol.category
+                });
+            }
+            return pkgs.length > 0 ? pkgs : null;
+        }
+
+        // Sort packages into deliverable / FC return / held. Runs on parse and
+        // again whenever the residential switch flips, so the counts on screen
+        // always match what the switch is set to.
+        function screenPackages(pkgs, bagName = null) {
+            const out = { deliverable: [], fc: [], held: [] };
+            const residentialOnly = document.getElementById('residentialOnly').checked;
+            pkgs.forEach(p => {
+                if (!isCustomerDestination(p.destination)) {
+                    out.fc.push({ ...p, bagName, reason: `Destination "${p.destination}" is a facility code` });
+                } else if (residentialOnly && !isResidentialAddress(p.addressType)) {
+                    out.held.push({ ...p, bagName, reason: `Address type "${p.addressType}" is not residential` });
+                } else {
+                    out.deliverable.push(p);
+                }
+            });
+            return out;
+        }
+
+        function rescreenAll() {
+            fcReturns = [];
+            addressHolds = [];
+            const loose = screenPackages(allParsedLoose);
+            fcReturns.push(...loose.fc);
+            addressHolds.push(...loose.held);
+            loosePackages = loose.deliverable;
+
+            bagFiles = [];
+            allParsedBags.forEach(b => {
+                const r = screenPackages(b.items, b.name);
+                fcReturns.push(...r.fc);
+                addressHolds.push(...r.held);
+                if (r.deliverable.length > 0) bagFiles.push({ name: b.name, items: r.deliverable });
+            });
+
+            renderBagList();
+            renderExceptions();
+            renderLoadSummary();
+        }
+
+        document.getElementById('csvFile').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            let pending = files.length;
+            const collected = [];
+            const failed = [];
+
+            // Every reader must call this exactly once, success or failure,
+            // or the counter never reaches zero and the panel never renders.
+            const settle = () => {
+                if (--pending > 0) return;
+                allParsedLoose = collected;
+                rescreenAll();
+                const info = document.getElementById('fileInfo');
+                if (collected.length > 0) {
+                    info.textContent = `${collected.length} packages read from ${files.length - failed.length} file(s)`;
+                    info.style.color = '#aaa';
+                } else {
+                    info.textContent = 'No packages found. Check that the file has tracking and ZIP columns.';
+                    info.style.color = '#d90429';
+                }
+                if (failed.length > 0) {
+                    info.textContent += ` — could not read: ${failed.join(', ')}`;
+                    info.style.color = '#fca311';
+                }
+            };
+
+            Array.from(files).forEach(f => {
+                const r = new FileReader();
+                r.onload = (evt) => {
+                    try {
+                        const res = parseCSV(evt.target.result);
+                        if (res) collected.push(...res);
+                        else failed.push(f.name);
+                    } catch (err) {
+                        console.error(`Parse failed for ${f.name}`, err);
+                        failed.push(f.name);
+                    }
+                    settle();
+                };
+                r.onerror = () => { failed.push(f.name); settle(); };
+                r.onabort = () => { failed.push(f.name); settle(); };
+                r.readAsText(f);
+            });
+        });
+
+        document.getElementById('bagFile').addEventListener('change', (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            Array.from(files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const res = parseCSV(evt.target.result);
+                        if (res) allParsedBags.push({ name: file.name, items: res });
+                        else console.warn(`No tracking/postal columns in bag file ${file.name}`);
+                    } catch (err) {
+                        console.error(`Bag parse failed for ${file.name}`, err);
+                    }
+                    rescreenAll();
+                };
+                reader.onerror = () => rescreenAll();
+                reader.readAsText(file);
+            });
+            document.getElementById('bagFile').value = "";
+        });
+
+        function renderBagList() {
+            const l = document.getElementById('bagList');
+            l.innerHTML = '';
+            bagFiles.forEach((b, i) => {
+                l.innerHTML += `
+                    <div style="display:flex; justify-content:space-between; margin-top:2px; padding:2px; border-bottom:1px solid #333;">
+                        <span>📦 ${b.name} (${b.items.length})</span>
+                        <span style="color:#d90429;cursor:pointer;font-weight:bold;" onclick="removeBag(${i})">x</span>
+                    </div>`;
+            });
+        }
+        window.removeBag = (i) => { allParsedBags.splice(i, 1); rescreenAll(); };
+
+        // How much space the load needs and what'll carry it
+        function renderLoadSummary() {
+            const el = document.getElementById('loadSummary');
+            const all = [...loosePackages, ...bagFiles.flatMap(b => b.items)];
+            if (all.length === 0) { el.innerHTML = ''; return; }
+
+            let effective = 0, cubic = 0, maxDim = 0;
+            const cats = { FLAT: 0, SMALL: 0, MEDIUM: 0, LARGE: 0, OVERSIZE: 0, UNKNOWN: 0 };
+            all.forEach(p => {
+                effective += (p.volumeL || 0);
+                cubic += (p.cubicL || 0);
+                maxDim = Math.max(maxDim, p.maxDimCm || 0);
+                cats[p.category || 'UNKNOWN']++;
+            });
+
+            const needed = smallestVehicleFor(effective, maxDim);
+            const vehText = needed
+                ? `${TIER_BY_ID[needed].label} minimum`
+                : 'Too large for one vehicle';
+            const vehColor = needed ? TIER_BY_ID[needed].color : '#d90429';
+
+            const order = ['FLAT', 'SMALL', 'MEDIUM', 'LARGE', 'OVERSIZE'];
+            let bar = '', legend = '';
+            order.forEach(c => {
+                if (!cats[c]) return;
+                const pct = (cats[c] / all.length) * 100;
+                bar += `<div class="cat-seg" style="width:${pct}%;background:${CATEGORY_COLORS[c]}" title="${c}: ${cats[c]}"></div>`;
+                legend += `<span style="color:#999"><span class="cat-dot" style="background:${CATEGORY_COLORS[c]}"></span>${c.toLowerCase()} ${cats[c]}</span>`;
+            });
+
+            const dimNote = maxDim > 0
+                ? `<div class="load-row"><span>Longest item</span><strong style="color:${maxDim > 120 ? '#fca311' : '#eee'}">${maxDim} cm</strong></div>`
+                : '';
+
+            el.innerHTML = `
+                <div class="load-summary">
+                    <div class="load-row"><span>Routable packages</span><strong>${all.length}</strong></div>
+                    <div class="load-row"><span>Space needed</span><strong>${Math.round(effective)} L</strong></div>
+                    ${dimNote}
+                    <div class="load-row"><span>Fits in</span><strong style="color:${vehColor}">${vehText}</strong></div>
+                    <div class="cat-bar">${bar}</div>
+                    <div class="cat-legend">${legend}</div>
+                    <div style="color:#666; margin-top:6px; font-size:0.9em;">
+                        Raw cubic ${Math.round(cubic)} L; flats charged at 25%.
+                    </div>
+                </div>`;
+        }
+
+        // FC returns and held addresses
+        function renderExceptions() {
+            const el = document.getElementById('exceptionButtons');
+            let html = '';
+            if (fcReturns.length > 0) {
+                html += `<button class="exception-btn btn-fc" onclick="openPage('fcPage')">
+                    <span>Fulfillment center returns</span><span class="count">${fcReturns.length}</span></button>`;
+            }
+            if (addressHolds.length > 0) {
+                html += `<button class="exception-btn btn-hold" onclick="openPage('holdPage')">
+                    <span>Held: non-residential</span><span class="count">${addressHolds.length}</span></button>`;
+            }
+            el.innerHTML = html;
+            buildExceptionTable('fcBody', fcReturns, 'fc');
+            buildExceptionTable('holdBody', addressHolds, 'hold');
+            buildExceptionLookup();
+        }
+
+        function buildExceptionTable(targetId, rows, kind) {
+            const el = document.getElementById(targetId);
+            if (!el) return;
+            if (rows.length === 0) {
+                el.innerHTML = `<div class="empty-state">Nothing here right now.</div>`;
+                return;
+            }
+            const banner = kind === 'fc'
+                ? `<div class="banner banner-fc"><strong>These ${rows.length} package(s) are not deliverable.</strong>
+                     Their destination is a facility code rather than a customer address, so they stay at the station
+                     and go back to the fulfillment center. They were excluded from every route.</div>`
+                : `<div class="banner banner-hold"><strong>${rows.length} package(s) are on hold.</strong>
+                     Their address type is not residential and <em>Residential only</em> is on.
+                     Turn the switch off to route them.</div>`;
+
+            let body = '';
+            rows.forEach(r => {
+                body += `<tr>
+                    <td><code>${r.tba}</code></td>
+                    <td>${r.postal || '&mdash;'}</td>
+                    <td>${r.destination || '<span style="color:#666">blank</span>'}</td>
+                    <td>${r.addressType || '<span style="color:#666">blank</span>'}</td>
+                    <td>${r.cubicL ? r.cubicL + ' L' : '&mdash;'}</td>
+                    <td>${r.bagName ? '📦 ' + r.bagName : 'Loose'}</td>
+                    <td style="color:#999">${r.reason || ''}</td>
+                </tr>`;
+            });
+
+            el.innerHTML = banner + `<table class="exc-table">
+                <thead><tr>
+                    <th>Tracking ID</th><th>ZIP</th><th>Destination</th>
+                    <th>Address type</th><th>Cubic</th><th>Source</th><th>Why</th>
+                </tr></thead><tbody>${body}</tbody></table>`;
+        }
+
+        // Merge in anything the server flagged that we didn't already have.
+        // Keyed by tracking number so re-running doesn't duplicate rows.
+        function mergeExceptions(serverFc, serverHolds) {
+            const add = (target, incoming) => {
+                if (!Array.isArray(incoming) || incoming.length === 0) return;
+                const seen = new Set(target.map(x => x.tba));
+                incoming.forEach(x => {
+                    if (!seen.has(x.tba)) { target.push(x); seen.add(x.tba); }
+                });
+            };
+            add(fcReturns, serverFc);
+            add(addressHolds, serverHolds);
+            renderExceptions();
+        }
+
+        // Screened-out packages never make it into a route, so they're missing
+        // from tbaLookup. Without this the scanner says NOT FOUND, which looks
+        // like a bad scan when really the package just belongs in the FC bin.
+        function buildExceptionLookup() {
+            exceptionLookup = {};
+            fcReturns.forEach(p => {
+                exceptionLookup[p.tba.trim().toUpperCase()] =
+                    { kind: 'FC', postal: p.postal, reason: p.reason, destination: p.destination };
+            });
+            addressHolds.forEach(p => {
+                exceptionLookup[p.tba.trim().toUpperCase()] =
+                    { kind: 'HOLD', postal: p.postal, reason: p.reason, addressType: p.addressType };
+            });
+        }
+
+        window.openPage = (id) => document.getElementById(id).classList.add('show');
+        window.closePage = (id) => document.getElementById(id).classList.remove('show');
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') document.querySelectorAll('.page-overlay.show').forEach(p => p.classList.remove('show'));
+        });
+
+        window.exportExceptions = (kind) => {
+            const rows = kind === 'fc' ? fcReturns : addressHolds;
+            if (rows.length === 0) return;
+            let csv = "TBA,POSTAL,DESTINATION,ADDRESS_TYPE,CUBIC_L,SOURCE,REASON\n";
+            rows.forEach(r => {
+                csv += `${r.tba},${r.postal},"${r.destination || ''}","${r.addressType || ''}",${r.cubicL || 0},"${r.bagName || 'Loose'}","${r.reason || ''}"\n`;
+            });
+            const b = new Blob([csv], { type: 'text/csv' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(b);
+            a.download = kind === 'fc' ? 'FC_Returns.csv' : 'Held_NonResidential.csv';
+            a.click();
+        };
+
+        function addManualDriver() {
+            const blockSelect = document.getElementById('blockTime');
+            const h = parseFloat(blockSelect.value);
+            const veh = document.getElementById('driverVehicle').value;
+            drivers.push({ id: drivers.length + 1, maxHours: h, maxPackages: 45, vehicle: veh });
+            renderDriverList();
+            const container = document.getElementById('driverList');
+            setTimeout(() => container.scrollTop = container.scrollHeight, 0);
+        }
+
+        window.removeDriver = (index = -1) => {
+            if (drivers.length === 0) return;
+            if (index > -1) drivers.splice(index, 1);
+            else drivers.pop();
+            reindexDrivers();
+            renderDriverList();
+        };
+
+        function reindexDrivers() { drivers.forEach((d, i) => { d.id = i + 1; }); }
+
+        function renderDriverList() {
+            // Plan on screen means the roster has drifted from what's displayed
+            const stale = allCalculatedRoutes.length > 0;
+            const recalcBtn = document.getElementById('recalcBtn');
+            if (recalcBtn) {
+                recalcBtn.textContent = stale ? 'Recalculate (fleet changed)' : 'Recalculate';
+            }
+
+            const l = document.getElementById('driverList');
+            l.innerHTML = '';
+            drivers.forEach((d, i) => {
+                const div = document.createElement('div');
+                div.className = 'driver-item';
+                const tier = TIER_BY_ID[d.vehicle || 'SUV'];
+                div.innerHTML = `
+                    <span style="display:flex; align-items:center; gap:8px;">
+                        <span style="color:#fca311; font-weight:bold;">D${d.id}</span> 
+                        <span>${d.maxHours}h</span>
+                        <span class="veh-badge" style="background:${tier.color};color:#121212;">${tier.label}</span>
+                        <span style="color:#666; font-size:0.85em;">${tier.usableL}L</span>
+                    </span>
+                    <button class="btn-remove-driver" onclick="removeDriver(${i})" title="Remove Driver">×</button>
+                `;
+                l.appendChild(div);
+            });
+            const calcBtn = document.getElementById('findRoutes');
+            if (drivers.length > 0) {
+                calcBtn.textContent = `Calculate (${drivers.length} Drivers)`;
+                calcBtn.style.opacity = '1';
+            } else {
+                calcBtn.textContent = 'Calculate';
+            }
+        }
+
+        document.getElementById('addDriver').addEventListener('click', addManualDriver);
+        document.addEventListener('keydown', (e) => {
+            const activeTag = document.activeElement.tagName.toLowerCase();
+            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') return;
+            if (e.key === '=' || e.key === '+') { e.preventDefault(); addManualDriver(); }
+            if (e.key === '-' || e.key === '_') { e.preventDefault(); removeDriver(); }
+        });
+
+        document.getElementById('autoPlan').addEventListener('click', () => {
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert("Load packages first");
+            const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
+            const veh = document.getElementById('autoVehicle').value;
+            document.getElementById('autoPlan').textContent = 'Thinking...';
+            let vFleet = [];
+            for (let i = 0; i < 200; i++) vFleet.push({ id: i + 1, maxHours: maxH, maxPackages: 48, vehicle: veh });
+            runBackend(vFleet, 'auto', maxH);
+        });
+
+        // Algorithm switch and the run-both comparison
+        document.querySelectorAll('.algo-opt').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.algo-opt').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentAlgorithm = btn.dataset.algo;
+                document.getElementById('algoHelp').textContent = ALGO_HELP[currentAlgorithm];
+            });
+        });
+
+        // Straight-line distance. Only used for reporting, so the comparison
+        // numbers don't depend on the drive-time matrix being identical.
+        function haversineKm(a, b) {
+            const R = 6371, rad = x => x * Math.PI / 180;
+            const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+            const h = Math.sin(dLat/2)**2 +
+                      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng/2)**2;
+            return 2 * R * Math.asin(Math.sqrt(h));
+        }
+
+        function scorePlan(routes, fleetMetrics) {
+            const real = routes.filter(r => !r.isOverflow && r.route.length > 0);
+            const ovf = routes.find(r => r.isOverflow);
+            let delivered = 0, maxLeg = 0;
+            const spreads = [], utils = [];
+            real.forEach(r => {
+                const stops = r.route.filter(s => !isWarehouse(s));
+                delivered += stops.reduce((a, s) => a + s.tbas.length, 0);
+                let sp = 0;
+                for (let i = 0; i < stops.length; i++)
+                    for (let j = i + 1; j < stops.length; j++)
+                        sp = Math.max(sp, haversineKm(stops[i].coordinates, stops[j].coordinates));
+                for (let i = 1; i < stops.length; i++)
+                    maxLeg = Math.max(maxLeg, haversineKm(stops[i-1].coordinates, stops[i].coordinates));
+                spreads.push(sp);
+                utils.push(r.totalHours / r.driverMax);
+            });
+            const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+            const sd = a => { const m = mean(a); return a.length ? Math.sqrt(mean(a.map(v => (v - m) ** 2))) : 0; };
+            return {
+                routes: real.length,
+                delivered,
+                overflow: ovf ? (ovf.totalPackages || 0) : 0,
+                meanSpread: mean(spreads),
+                maxLeg,
+                avgUtil: mean(utils),
+                balance: sd(utils),
+                driveSec: fleetMetrics ? fleetMetrics.optimizedDriveSec : 0,
+                naivePct: fleetMetrics ? fleetMetrics.naiveSavedPct : 0
+            };
+        }
+
+        function callPlanner(driverSet, mode, algorithm) {
+            return fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    loosePackages, bags: bagFiles, drivers: driverSet, mode, algorithm,
+                    residentialOnly: document.getElementById('residentialOnly').checked,
+                    config: configOverrides
+                })
+            }).then(res => res.json());
+        }
+
+        document.getElementById('compareAlgos').addEventListener('click', async () => {
+            if (loosePackages.length === 0 && bagFiles.length === 0) return alert('Load packages first');
+            const useAuto = drivers.length === 0;
+            let driverSet, mode, label;
+            if (useAuto) {
+                const maxH = parseFloat(document.getElementById('autoMaxBlock').value);
+                const veh = document.getElementById('autoVehicle').value;
+                driverSet = Array.from({ length: 200 }, (_, i) =>
+                    ({ id: i + 1, maxHours: maxH, maxPackages: 48, vehicle: veh }));
+                mode = 'auto';
+                label = `Auto-plan, ${maxH}h blocks, up to ${veh}`;
+            } else {
+                driverSet = drivers;
+                mode = 'manual';
+                label = `${drivers.length} manual drivers`;
+            }
+
+            const btn = document.getElementById('compareAlgos');
+            btn.textContent = 'Running both...';
+            btn.disabled = true;
+            try {
+                const [g, c] = await Promise.all([
+                    callPlanner(driverSet, mode, 'greedy'),
+                    callPlanner(driverSet, mode, 'cluster')
+                ]);
+                if (!g.routes || !c.routes) throw new Error(g.error || c.error || 'Planner failed');
+                renderComparison(
+                    scorePlan(g.routes, g.fleetMetrics),
+                    scorePlan(c.routes, c.fleetMetrics),
+                    label);
+                openPage('cmpPage');
+            } catch (e) {
+                alert('Comparison failed: ' + e.message);
+            } finally {
+                btn.textContent = 'Run both & compare';
+                btn.disabled = false;
+            }
+        });
+
+        function renderComparison(g, c, label) {
+            // lowerWins says whether a smaller number is the better result
+            const rows = [
+                ['Routes produced',        g.routes,      c.routes,      null],
+                ['Packages delivered',     g.delivered,   c.delivered,   false],
+                ['Left unassigned',        g.overflow,    c.overflow,    true],
+                ['Total drive time',       g.driveSec,    c.driveSec,    true,  'time'],
+                ['Saved vs no planning',   g.naivePct,    c.naivePct,    false, '%'],
+                ['Mean route spread',      g.meanSpread,  c.meanSpread,  true,  'km'],
+                ['Longest single leg',     g.maxLeg,      c.maxLeg,      true,  'km'],
+                ['Average driver load',    g.avgUtil*100, c.avgUtil*100, null,  '%'],
+                ['Load evenness (lower=better)', g.balance*100, c.balance*100, true, ''],
+            ];
+
+            let body = '';
+            let gWins = 0, cWins = 0;
+            rows.forEach(([name, gv, cv, lowerWins, unit]) => {
+                const fmt = v => unit === 'km'   ? v.toFixed(1) + ' km'
+                              : unit === '%'    ? Math.round(v) + '%'
+                              : unit === 'time' ? formatHours(v / 3600)
+                              : unit === ''     ? v.toFixed(1)
+                              : v;
+                let gc = '', cc = '';
+                if (lowerWins !== null && Math.abs(gv - cv) > 0.05) {
+                    const greedyBetter = lowerWins ? gv < cv : gv > cv;
+                    gc = greedyBetter ? 'cmp-win' : 'cmp-lose';
+                    cc = greedyBetter ? 'cmp-lose' : 'cmp-win';
+                    greedyBetter ? gWins++ : cWins++;
+                }
+                body += `<tr><td class="metric">${name}</td>
+                    <td class="${gc}">${fmt(gv)}</td>
+                    <td class="${cc}">${fmt(cv)}</td></tr>`;
+            });
+
+            // Lead with drive time, since that's what actually costs money. But
+            // only call a winner when both planners carried the same load.
+            const diffSec = Math.abs(g.driveSec - c.driveSec);
+            const faster = g.driveSec < c.driveSec ? 'Greedy' : 'Cluster first';
+            const sameWork = g.delivered === c.delivered;
+            const pctDiff = Math.max(g.driveSec, c.driveSec) > 0
+                ? Math.round((diffSec / Math.max(g.driveSec, c.driveSec)) * 100) : 0;
+
+            let headline;
+            if (g.driveSec === 0 || c.driveSec === 0) {
+                headline = 'Drive time was not reported for one of the runs.';
+            } else if (diffSec < 120) {
+                headline = `Both planners land within two minutes of each other on total drive time`
+                         + `${sameWork ? '' : ', though they delivered different amounts'}.`;
+            } else if (sameWork) {
+                headline = `<strong>${faster} is ${formatHours(diffSec / 3600)} faster overall</strong> `
+                         + `(${pctDiff}% less driving) for the same ${g.delivered} packages.`;
+            } else {
+                const moreName = g.delivered > c.delivered ? 'Greedy' : 'Cluster first';
+                const moreCount = Math.abs(g.delivered - c.delivered);
+                headline = `<strong>${faster} drives ${formatHours(diffSec / 3600)} less</strong>, but `
+                         + `${moreName} delivers ${moreCount} more package${moreCount === 1 ? '' : 's'}. `
+                         + `Not a straight comparison &mdash; more packages means more driving.`;
+            }
+
+            const verdict = headline + `<br><span style="color:#9ac;">`
+                + (cWins > gWins ? `Cluster first also led on ${cWins} of the other measures.`
+                  : gWins > cWins ? `Greedy also led on ${gWins} of the other measures.`
+                  : 'The remaining measures came out level.') + `</span>`;
+
+            document.getElementById('cmpBody').innerHTML = `
+                <div style="color:#aaa; font-size:0.9em; margin-bottom:4px;">${label}</div>
+                <table class="cmp-table">
+                    <thead><tr><th>Measure</th><th>Greedy seed-and-grow</th><th>Cluster first</th></tr></thead>
+                    <tbody>${body}</tbody>
+                </table>
+                <div class="cmp-verdict">${verdict}</div>
+                <div class="cmp-note">
+                    <strong>Total drive time</strong> is the fleet's combined time behind the wheel, service
+                    time excluded. <strong>Saved vs no planning</strong> compares each planner against splitting
+                    the manifest into equal piles with no software, over the same delivered stops.<br><br>
+                    <strong>Reading this:</strong> longest single leg is the drive between two consecutive
+                    stops, which a driver pays on every leg all day. Route spread includes the drive out
+                    from the warehouse, so a high spread with a short longest leg just means a far cluster,
+                    not a bad route. Load evenness is the spread of driver utilisation, so a lower number
+                    means the work landed more evenly across the fleet.
+                </div>`;
+        }
+
+        // Collapse the panel to give the map the full width. MapLibre has to be
+        // told to re-measure or it keeps drawing at the old size.
+        document.getElementById('sidebarToggle').addEventListener('click', () => {
+            const layout = document.querySelector('.main-layout');
+            const collapsed = layout.classList.toggle('sidebar-collapsed');
+            document.getElementById('sidebarToggle').innerHTML = collapsed ? '&#9654;' : '&#9664;';
+            setTimeout(() => { if (map) map.resize(); }, 200);
+        });
+
+        // Departure time just re-renders. It never re-plans anything.
+        document.getElementById('departTime').addEventListener('change', () => {
+            if (allCalculatedRoutes.length > 0) renderGroupedView(allCalculatedRoutes);
+        });
+
+        // Re-plans with whatever fleet is on screen. Add or drop drivers and
+        // hit this, no refresh needed.
+        document.getElementById('recalcBtn').addEventListener('click', () => {
+            if (drivers.length === 0) {
+                return alert("No drivers in the fleet. Add drivers, or use Auto-Plan.");
+            }
+            document.getElementById('recalcBtn').textContent = 'Recalculating...';
+            runBackend(drivers, 'manual', 0);
+            setTimeout(() => document.getElementById('recalcBtn').textContent = 'Recalculate', 50);
+        });
+
+        document.getElementById('findRoutes').addEventListener('click', () => {
+            if (drivers.length === 0) return alert("Add drivers or use Auto-Plan");
+            document.getElementById('findRoutes').textContent = 'Calculating...';
+            runBackend(drivers, 'manual', 0);
+        });
+
+        // Wipe the previous plan before building a new one. Skip this and
+        // markers pile up, the map filter stays stuck on an old driver, and the
+        // scanner keeps finding tracking numbers from the last run. That's why
+        // you used to have to refresh the page. Packages and drivers survive.
+        function resetPlan({ keepPanels = false } = {}) {
+            allCalculatedRoutes = [];
+            tbaLookup = {};
+            flaggedRoutes = [];
+            remoteStops = [];
+            moveHistory = [];
+            const ub = document.getElementById('undoBar');
+            if (ub) ub.innerHTML = '';
+
+            mapLayers.forEach(obj => obj.marker.remove());
+            mapLayers = [];
+            if (map) {
+                if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+                if (map.getSource('route-lines')) map.removeSource('route-lines');
+            }
+
+            document.getElementById('routeList').innerHTML = '';
+            document.getElementById('metricsBar').innerHTML = '';
+            document.getElementById('validationBanner').innerHTML = '';
+            document.getElementById('remoteNotice').innerHTML = '';
+            document.getElementById('zipMenu').innerHTML = '';
+            document.getElementById('zipMenu').classList.remove('show');
+
+            ['statRoutes', 'statPkgs', 'statStops', 'statVolume'].forEach(id => {
+                document.getElementById(id).innerText = '0';
+            });
+            document.getElementById('statVehicleMix').innerHTML = '';
+
+            const sInput = document.getElementById('scanInput');
+            sInput.value = '';
+            document.getElementById('driverDisplay').textContent = '--';
+            document.getElementById('driverDisplay').style.color = '#fff';
+            document.getElementById('stopDisplay').textContent = 'Waiting...';
+            window.speechSynthesis.cancel();
+
+            if (!keepPanels) {
+                document.getElementById('resultsArea').style.display = 'none';
+                document.getElementById('scanPanel').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'none';
+            }
+        }
+
+        // Clears the plan and the fleet, keeps the manifest
+        window.clearPlan = () => {
+            resetPlan();
+            drivers = [];
+            renderDriverList();
+        };
+
+        function setPlanningState(busy) {
+            const auto = document.getElementById('autoPlan');
+            const calc = document.getElementById('findRoutes');
+            [auto, calc].forEach(b => {
+                b.disabled = busy;
+                b.style.opacity = busy ? '0.6' : '1';
+                b.style.cursor = busy ? 'wait' : 'pointer';
+            });
+        }
+
+        // Put the button labels back after a run finishes or blows up
+        function restoreButtons() {
+            document.getElementById('autoPlan').textContent = 'Auto-Plan';
+            const dLen = drivers.length;
+            document.getElementById('findRoutes').textContent =
+                dLen > 0 ? `Calculate (${dLen} Drivers)` : 'Calculate';
+            setPlanningState(false);
+        }
+
+        function runBackend(driverSet, mode, baseMax) {
+            setPlanningState(true);
+            resetPlan({ keepPanels: true });
+            fetch('/calculate-routes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    loosePackages,
+                    bags: bagFiles,
+                    drivers: driverSet,
+                    mode: mode,
+                    algorithm: currentAlgorithm,
+                    residentialOnly: document.getElementById('residentialOnly').checked,
+                    config: configOverrides
+                })
+            })
+                .then(res => res.json())
+                .then(payload => {
+                    // Newer builds return an object, older ones a bare array.
+                    // Accept either.
+                    const routes = Array.isArray(payload) ? payload : payload.routes;
+                    if (!Array.isArray(routes)) throw new Error(payload.error || 'Unexpected response from server');
+                    if (!Array.isArray(payload)) {
+                        serverVehicleTiers = payload.vehicleTiers || null;
+                        // We screen before sending, so the server usually reports
+                        // nothing. Merge rather than assign: an empty array from
+                        // the server would otherwise wipe the real list.
+                        mergeExceptions(payload.fcReturns, payload.addressHolds);
+                        if (payload.configSchema && !configSchema) {
+                            configSchema = payload.configSchema;
+                            configDefaults = payload.configDefaults || {};
+                            vehicleSchema = payload.vehicleSchema || null;
+                            vehicleDefaults = payload.vehicleDefaults || {};
+                        }
+                        remoteStops = payload.remoteStops || [];
+                        lastFleetMetrics = payload.fleetMetrics;
+                        renderMetrics(payload.fleetMetrics);
+                        renderRemoteNotice();
+                        renderValidation(payload.routes, payload.validation);
+                    }
+                    const active = routes.filter(r => r.route.length > 0);
+                    allCalculatedRoutes = active;
+                    if (mode === 'auto') {
+                        const blocks = [2, 2.5, 3, 3.5, 4];
+                        drivers = [];
+                        let seq = 0;
+                        active.forEach((r) => {
+                            // Overflow isn't a driver. It used to get pushed onto
+                            // the roster as a 0-hour phantom that later runs then
+                            // tried to give work to. Broke every recalculation.
+                            if (r.isOverflow || r.driverId.toString().includes("OVERFLOW")) return;
+                            const i = seq++;
+                            const needed = r.totalHours;
+                            let rec = baseMax;
+                            for (let b of blocks) if (b >= needed) { rec = b; break; }
+                            if (rec > baseMax) rec = baseMax;
+                            r.driverMax = rec;
+                            r.driverId = i + 1;
+                            drivers.push({
+                                id: i + 1, maxHours: baseMax, maxPackages: 48,
+                                recommendedHours: rec,
+                                vehicle: r.requiredVehicle && r.requiredVehicle !== 'UNFITTABLE'
+                                    ? r.requiredVehicle
+                                    : document.getElementById('autoVehicle').value
+                            });
+                        });
+                        renderDriverList();
+                        // REMOVED ALERT: alert(`Plan: ${active.length} Routes Generated.`);
+                    }
+                    restoreButtons();
+                    document.getElementById('resultsArea').style.display = 'block';
+                    document.getElementById('scanPanel').style.display = 'block';
+                    document.getElementById('dashboard').style.display = 'flex'; // Show Dashboard
+                    document.getElementById('scanInput').focus();
+                    
+                    renderGroupedView(active);
+                    buildMap(active);
+                    buildLookup(active);
+                    updateDashboard(active);
+                })
+                .catch(e => {
+                    console.error(e);
+                    restoreButtons();
+                    const statusEl = document.getElementById('parseStatus');
+                    statusEl.className = 'parse-status error';
+                    statusEl.textContent = `Routing failed: ${e.message}. Nothing was changed — adjust and try again.`;
+                });
+        }
+
+        // --- DASHBOARD LOGIC ---
+        function updateDashboard(routes) {
+            const totalRoutes = routes.length;
+            let totalPkgs = 0;
+            let totalStops = 0;
+            let totalVolume = 0;
+            let zipMap = {};
+            const vehMix = {};
+
+            routes.forEach(r => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const dName = isOverflow ? "Overflow" : `D${r.driverId}`;
+
+                totalVolume += (r.totalVolumeL || 0);
+                if (r.requiredVehicle) vehMix[r.requiredVehicle] = (vehMix[r.requiredVehicle] || 0) + 1;
+
+                r.route.forEach((stop) => {
+                    if (isWarehouse(stop)) return;
+                    const count = stop.tbas ? stop.tbas.length : 0;
+                    totalPkgs += count;
+                    totalStops++;
+
+                    const zipMatch = stop.address.match(/\b\d{5}\b/);
+                    if (zipMatch) {
+                        const zip = zipMatch[0];
+                        if (!zipMap[zip]) zipMap[zip] = new Set();
+                        zipMap[zip].add({ name: dName, color: color });
+                    }
+                });
+            });
+
+            document.getElementById('statRoutes').innerText = totalRoutes;
+            document.getElementById('statPkgs').innerText = totalPkgs;
+            document.getElementById('statStops').innerText = totalStops;
+            document.getElementById('statVolume').innerText = Math.round(totalVolume);
+
+            const mixEl = document.getElementById('statVehicleMix');
+            mixEl.innerHTML = VEHICLE_TIERS
+                .filter(t => vehMix[t.id])
+                .map(t => `<span class="veh-badge" style="background:${t.color};color:#121212;margin-left:6px;">${vehMix[t.id]}× ${t.label}</span>`)
+                .join('');
+
+            // Build Zip Menu
+            const menu = document.getElementById('zipMenu');
+            menu.innerHTML = '';
+            Object.keys(zipMap).sort().forEach(zip => {
+                const drivers = Array.from(zipMap[zip]);
+                let tags = '';
+                drivers.forEach(d => {
+                    tags += `<span class="zip-tag" style="background:${d.color}">${d.name}</span>`;
+                });
+                
+                const row = document.createElement('div');
+                row.className = 'zip-row';
+                row.innerHTML = `<span style="color:#aaa">${zip}</span> <div>${tags}</div>`;
+                menu.appendChild(row);
+            });
+        }
+
+        function toggleZipMenu() {
+            document.getElementById('zipMenu').classList.toggle('show');
+        }
+
+        // Close dropdown if clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.zip-btn')) {
+                const dropdowns = document.getElementsByClassName("zip-content");
+                for (let i = 0; i < dropdowns.length; i++) {
+                    if (dropdowns[i].classList.contains('show')) {
+                        dropdowns[i].classList.remove('show');
+                    }
+                }
+            }
+        }
+
+        // =====================================================
+        // OPTIMIZATION METRICS
+        // Baseline is the manifest order with no solver at all, so the saving
+        // shown is what the optimizer is actually worth on this plan.
+        // =====================================================
+        // Compared against what you'd get with no software at all
+        function renderMetrics(m) {
+            const el = document.getElementById('metricsBar');
+            if (!m) { el.innerHTML = ''; return; }
+
+            if (!m.naiveDriveSec) { el.innerHTML = ''; return; }
+
+            const viol = m.naiveViolations || 0;
+            const chunks = m.naiveChunks || 0;
+            const b = m.naiveBreakdown || {};
+            const parts = [];
+            if (b.overTime) parts.push(`${b.overTime} over the block`);
+            if (b.overVolume) parts.push(`${b.overVolume} over cubic capacity`);
+            if (b.overPackages) parts.push(`${b.overPackages} over the package limit`);
+            if (b.itemTooLong) parts.push(`${b.itemTooLong} carrying an item that will not fit`);
+            if (b.longLeg) parts.push(`${b.longLeg} with an oversized gap between stops`);
+
+            const driveLine = m.naiveSavedPct >= 1
+                ? `${m.naiveSavedPct}% less driving (${formatHours(m.naiveSavedSec / 3600)} saved)`
+                : m.naiveSavedPct <= -1
+                    ? `${Math.abs(m.naiveSavedPct)}% more driving`
+                    : `about the same total drive time`;
+
+            el.innerHTML = `
+                <div class="metrics-bar">
+                    <div class="metric-cell">
+                        <div class="metrics-big">${viol === 0 ? '\u2713' : viol}</div>
+                        <div class="metrics-sub">${viol === 0
+                            ? 'unplanned split would<br>also have worked'
+                            : `problem${viol === 1 ? '' : 's'} an unplanned<br>split would have caused`}</div>
+                    </div>
+                    <div class="metrics-sub" style="border-left:1px solid #333; padding-left:14px; flex:1;">
+                        Splitting the manifest into ${chunks} even pile${chunks === 1 ? '' : 's'} gives
+                        ${driveLine}${parts.length ? `, but leaves ${parts.join(', ')}` : ''}.<br>
+                        This plan: <strong style="color:#eee;">${formatHours(m.optimizedDriveSec / 3600)}</strong>
+                        driving across ${m.routesPlanned || 0} route${m.routesPlanned === 1 ? '' : 's'},
+                        ${m.planViolations ? `<span style="color:#ff8a9c;">${m.planViolations} problem(s)</span>` : 'every constraint met'}.
+                    </div>
+                    <span class="metrics-info" onclick="openPage('metricsPage')">How is this measured?</span>
+                    <span class="metrics-info" onclick="openPage('costPage')">Cost per route</span>
+                </div>`;
+        }
+
+        // Planning won't break these rules by itself. Moving a package will.
+        function renderValidation(routes, summary) {
+            const el = document.getElementById('validationBanner');
+            const errors = summary ? summary.errors : 0;
+            const warnings = summary ? summary.warnings : 0;
+
+            // Hang on to these so the banner can open a review list
+            flaggedRoutes = (routes || []).filter(r => r.issues && r.issues.length > 0);
+
+            if (errors > 0) {
+                el.innerHTML = `<div class="validation-banner vb-error clickable" onclick="openIssueReview()">
+                    ${errors} route${errors > 1 ? 's have' : ' has'} a problem that will stop dispatch.
+                    ${warnings > 0 ? `Plus ${warnings} warning${warnings > 1 ? 's' : ''}.` : ''}
+                    <span class="banner-cta">Review \u2192</span></div>`;
+            } else if (warnings > 0) {
+                el.innerHTML = `<div class="validation-banner vb-warning clickable" onclick="openIssueReview()">
+                    ${warnings} route${warnings > 1 ? 's are' : ' is'} close to a limit.
+                    <span class="banner-cta">Review \u2192</span></div>`;
+            } else {
+                el.innerHTML = `<div class="validation-banner vb-ok">All routes pass the safety checks.</div>`;
+            }
+        }
+
+        // Just the flagged routes, so you're not hunting through every card
+        window.openIssueReview = () => {
+            const body = document.getElementById('issueBody');
+            if (flaggedRoutes.length === 0) {
+                body.innerHTML = '<div class="empty-state">Nothing flagged.</div>';
+                openPage('issuePage');
+                return;
+            }
+
+            let html = '';
+            flaggedRoutes.forEach(r => {
+                const stops = r.route.filter(s => !isWarehouse(s));
+                const pkgs = stops.reduce((a, s) => a + s.tbas.length, 0);
+                const isOv = r.isOverflow;
+                const color = isOv ? '#666' : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const worst = r.issues.some(i => i.severity === 'error') ? 'error' : 'warning';
+
+                html += `<div class="issue-card issue-card-${worst}">
+                    <div class="issue-card-head">
+                        <span style="color:${color}; font-weight:bold;">
+                            ${isOv ? 'Unassigned' : 'Driver ' + r.driverId}
+                        </span>
+                        <span style="color:#999; font-size:0.85em;">
+                            ${stops.length} stops &middot; ${pkgs} pkgs
+                            ${!isOv ? `&middot; ${formatHours(r.totalHours)} of ${r.driverMax}h` : ''}
+                            ${!isOv && r.totalVolumeL !== undefined ? `&middot; ${Math.round(r.totalVolumeL)}L` : ''}
+                            ${r.assignedVehicle ? `&middot; ${r.assignedVehicle}` : ''}
+                        </span>
+                    </div>
+                    ${renderIssues(r.issues)}
+                    <div class="issue-card-stops">
+                        ${stops.map((s, i) => `<span class="issue-stop">${i + 1}. ${s.address}
+                            <span style="color:#666;">(${s.tbas.length})</span></span>`).join('')}
+                    </div>
+                    ${!isOv ? `<button class="btn-cfg issue-focus" onclick="focusFlagged(${r.driverId})">
+                        Show on map</button>` : ''}
+                </div>`;
+            });
+            body.innerHTML = html;
+            openPage('issuePage');
+        };
+
+        window.focusFlagged = (driverId) => {
+            closePage('issuePage');
+            filterMapByDriver(driverId);
+            document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+        };
+
+        // Stops with nothing near them. Worth deciding on before dispatch rather
+        // than discovering when a route sprawls or a package overflows.
+        function renderRemoteNotice() {
+            const el = document.getElementById('remoteNotice');
+            if (!remoteStops.length) { el.innerHTML = ''; return; }
+            const pk = remoteStops.reduce((a, s) => a + s.packages, 0);
+            el.innerHTML = `<div class="validation-banner vb-remote clickable" onclick="openPage('remotePage')">
+                ${remoteStops.length} area${remoteStops.length > 1 ? 's sit' : ' sits'} on ${remoteStops.length > 1 ? 'their' : 'its'} own
+                (${pk} package${pk > 1 ? 's' : ''}) &mdash; these stretch routes or go unassigned
+                <span class="banner-cta">Look &rarr;</span></div>`;
+
+            document.getElementById('remoteBody').innerHTML = `
+                <div class="cmp-note" style="margin-bottom:14px;">
+                    These stops are either a long way from the warehouse or have no other stop near
+                    them. Nothing is wrong with them, but they are the ones that stretch a route
+                    across the map or end up unassigned when the fleet is small. Worth deciding
+                    deliberately: give one a dedicated run, or hold them for another day.
+                </div>
+                ${remoteStops.map(s => `
+                    <div class="issue-card issue-card-remote">
+                        <div class="issue-card-head">
+                            <span style="color:#3a86ff; font-weight:bold;">${s.address}</span>
+                            <span style="color:#999; font-size:0.85em;">
+                                ${s.packages} package${s.packages > 1 ? 's' : ''}
+                                &middot; ${s.stemMin} min from base
+                                ${s.nearestMin !== null ? `&middot; nearest stop ${s.nearestMin} min` : ''}
+                            </span>
+                        </div>
+                        <div class="issue issue-remote">${s.reason}</div>
+                        <div class="eta-tbas" style="padding-left:0; margin-top:8px;">${s.tbas.join(', ')}</div>
+                    </div>`).join('')}`;
+        }
+
+        // =====================================================
+        // MANUAL PACKAGE MOVES
+        //
+        // Menu based rather than drag: a stop can hold twenty packages, and
+        // dragging one of those onto the right driver on a laptop trackpad at
+        // 4am is not a thing anyone wants to do.
+        // =====================================================
+        let pendingMove = null;
+
+        // Snapshots taken before each move. Deep copies, because the render code
+        // mutates route objects and a shallow copy would rot underneath us.
+        let moveHistory = [];
+        const MAX_UNDO = 20;
+
+        function pushUndo(label) {
+            moveHistory.push({
+                label,
+                routes: JSON.parse(JSON.stringify(allCalculatedRoutes)),
+                metrics: lastFleetMetrics ? JSON.parse(JSON.stringify(lastFleetMetrics)) : null
+            });
+            if (moveHistory.length > MAX_UNDO) moveHistory.shift();
+            renderUndoBar();
+        }
+
+        function renderUndoBar() {
+            const el = document.getElementById('undoBar');
+            if (!el) return;
+            if (moveHistory.length === 0) { el.innerHTML = ''; return; }
+            const last = moveHistory[moveHistory.length - 1];
+            el.innerHTML = `<div class="undo-bar">
+                <span>${moveHistory.length} manual change${moveHistory.length > 1 ? 's' : ''}
+                    &middot; last: ${last.label}</span>
+                <button class="btn-undo" onclick="undoLastMove()">Undo</button>
+                <button class="btn-undo" onclick="undoAllMoves()">Undo all</button>
+            </div>`;
+        }
+
+        window.undoLastMove = () => {
+            const prev = moveHistory.pop();
+            if (!prev) return;
+            allCalculatedRoutes = prev.routes;
+            lastFleetMetrics = prev.metrics;
+            applyRestoredPlan(prev.routes, `Undid: ${prev.label}`);
+        };
+
+        window.undoAllMoves = () => {
+            if (moveHistory.length === 0) return;
+            const first = moveHistory[0];
+            moveHistory = [];
+            allCalculatedRoutes = first.routes;
+            lastFleetMetrics = first.metrics;
+            applyRestoredPlan(first.routes, 'Back to the original plan');
+        };
+
+        // Shared by both undo paths: put the plan back on screen and re-check it.
+        function applyRestoredPlan(routes, message) {
+            rebuildTbaLookup(routes);
+            renderGroupedView(routes);
+            renderRoutesOnMap(routes);
+            renderMetrics(lastFleetMetrics);
+            const errs = routes.reduce((a, r) =>
+                a + ((r.issues || []).filter(i => i.severity === 'error').length), 0);
+            const warns = routes.reduce((a, r) =>
+                a + ((r.issues || []).filter(i => i.severity === 'warning').length), 0);
+            renderValidation(routes, { errors: errs, warnings: warns });
+            renderUndoBar();
+            showToast(message, errs ? 'error' : warns ? 'warn' : 'ok');
+        }
+
+
+        window.openMoveDialog = (fromDriverId, address) => {
+            const route = fromDriverId === 'OVERFLOW'
+                ? allCalculatedRoutes.find(r => r.isOverflow)
+                : allCalculatedRoutes.find(r => String(r.driverId) === String(fromDriverId));
+            if (!route) return;
+            const stop = route.route.find(s => !isWarehouse(s) && s.address === address);
+            if (!stop) return;
+
+            pendingMove = { fromDriverId, address, stop, tbas: stop.tbas, selected: new Set() };
+
+            const isBag = !!stop.bagId;
+            const single = stop.tbas.length < 2;
+
+            // Sorted by how close each driver's route already runs to this stop.
+            // The nearest driver is almost always the right answer, and hunting
+            // for them in a list of eight is the slow part of the job.
+            const targets = allCalculatedRoutes
+                .filter(r => String(r.driverId) !== String(fromDriverId) && !r.isOverflow)
+                .map(r => {
+                    const stops = r.route.filter(s => !isWarehouse(s));
+                    let near = Infinity;
+                    stops.forEach(s => {
+                        if (!s.coordinates || !stop.coordinates) return;
+                        const d = haversineKm(s.coordinates, stop.coordinates);
+                        if (d < near) near = d;
+                    });
+                    return { r, stops, near };
+                })
+                .sort((a, b) => a.near - b.near);
+
+            document.getElementById('moveTitle').textContent = `Move from ${address}`;
+            document.getElementById('moveSub').textContent =
+                (route.isOverflow ? 'Currently unassigned' : `Currently on driver ${fromDriverId}`)
+                + ` \u00B7 ${stop.tbas.length} package${stop.tbas.length > 1 ? 's' : ''}`;
+
+            let html = `<div class="move-section">
+                <div class="move-label">Where it is</div>
+                <div class="move-map" id="moveMap"></div>
+            </div>
+
+            <div class="move-section">
+                <div class="move-label">What to move</div>
+                <div class="move-choice">
+                    <label class="move-radio">
+                        <input type="radio" name="moveScope" value="all" checked onchange="setMoveScope('all')">
+                        <span class="move-radio-text">
+                            <span class="move-name">Whole stop</span>
+                            <span class="move-hint">all ${stop.tbas.length} package${stop.tbas.length > 1 ? 's' : ''}</span>
+                        </span>
+                    </label>
+                    <label class="move-radio ${isBag || single ? 'disabled' : ''}">
+                        <input type="radio" name="moveScope" value="some"
+                               ${isBag || single ? 'disabled' : ''} onchange="setMoveScope('some')">
+                        <span class="move-radio-text">
+                            <span class="move-name">Pick packages</span>
+                            <span class="move-hint">${isBag ? 'bags cannot be split'
+                                : single ? 'only one package here' : 'choose individually'}</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="move-section" id="movePkgSection" style="display:none;">
+                <div class="move-label">Packages <span id="moveCount" class="move-hint">none selected</span></div>
+                <input type="text" class="move-search" id="movePkgSearch"
+                       placeholder="Search or scan a tracking number">
+                <div class="move-pkg-actions">
+                    <button onclick="selectAllMovePkgs(true)">Select all</button>
+                    <button onclick="selectAllMovePkgs(false)">Clear</button>
+                </div>
+                <div class="move-pkg-list" id="movePkgList">
+                    ${stop.tbas.map(t => `
+                        <label class="move-pkg" data-tba="${t}">
+                            <input type="checkbox" value="${t}" onchange="toggleMovePkg('${t}', this)">
+                            <span>${t}</span>
+                        </label>`).join('')}
+                </div>
+            </div>
+
+            <div class="move-section">
+                <div class="move-label">Send to <span class="move-hint">nearest driver first</span></div>
+                <div class="move-targets">`;
+
+            if (targets.length === 0) {
+                html += `<div class="empty-state" style="padding:12px;">No other driver available.</div>`;
+            } else {
+                targets.forEach(({ r, stops, near }) => {
+                    const pk = stops.reduce((a, s) => a + s.tbas.length, 0);
+                    const already = stops.some(s => s.address === address);
+                    const util = Math.round((r.totalHours / r.driverMax) * 100);
+                    const color = DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                    const nearTxt = already ? 'already goes here'
+                        : isFinite(near) ? `${near.toFixed(1)} km away` : 'no overlap';
+                    html += `<div class="move-target" onclick="chooseMoveTarget(this, '${r.driverId}')">
+                        <span class="move-dot" style="background:${color};"></span>
+                        <div class="move-target-main">
+                            <span class="move-target-name">Driver ${r.driverId}</span>
+                            <span class="move-target-meta">${r.assignedVehicle || ''} &middot; ${pk} pkgs
+                                &middot; ${util}% of ${r.driverMax}h &middot; ${Math.round(r.vehicleUsagePct || 0)}% full</span>
+                        </div>
+                        <span class="move-near ${already || near < 8 ? '' : 'far'}">${nearTxt}</span>
+                    </div>`;
+                });
+            }
+            html += `</div></div>`;
+
+            document.getElementById('moveBody').innerHTML = html;
+            document.getElementById('moveApply').disabled = true;
+            document.getElementById('moveError').textContent = '';
+            openPage('movePage');
+
+            drawMoveMap(stop, targets);
+
+            const search = document.getElementById('movePkgSearch');
+            if (search) {
+                search.addEventListener('input', filterMovePkgs);
+                // A handheld scanner sends Enter at the end. Tick the match, clear, ready for the next.
+                search.addEventListener('keydown', e => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    const v = search.value.trim().toUpperCase();
+                    if (!v) return;
+                    const exact = pendingMove.tbas.find(t => t.toUpperCase() === v);
+                    const partial = pendingMove.tbas.filter(t => t.toUpperCase().endsWith(v));
+                    const one = exact || (partial.length === 1 ? partial[0] : null);
+                    if (one) {
+                        const cb = document.querySelector(`.move-pkg[data-tba="${one}"] input`);
+                        if (cb && !cb.checked) { cb.checked = true; toggleMovePkg(one, cb); }
+                        search.value = '';
+                        filterMovePkgs();
+                    }
+                });
+            }
+        };
+
+        // A map inside the dialog showing the stop being moved and where each
+        // candidate driver already goes. Reading ZIP codes off a list tells you
+        // nothing about whether a driver is actually nearby.
+        let moveMapInstance = null;
+        function drawMoveMap(stop, targets) {
+            const el = document.getElementById('moveMap');
+            if (!el || !stop.coordinates) return;
+            if (moveMapInstance) { moveMapInstance.remove(); moveMapInstance = null; }
+
+            moveMapInstance = new maplibregl.Map({
+                container: 'moveMap',
+                style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+                center: [stop.coordinates.lng, stop.coordinates.lat],
+                zoom: 9
+            });
+
+            moveMapInstance.on('load', () => {
+                const bounds = new maplibregl.LngLatBounds();
+
+                targets.forEach(({ r, stops }) => {
+                    const color = DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                    stops.forEach(s => {
+                        if (!s.coordinates) return;
+                        const d = document.createElement('div');
+                        d.style.cssText = `width:10px;height:10px;border-radius:50%;background:${color};opacity:.7;`;
+                        new maplibregl.Marker({ element: d })
+                            .setLngLat([s.coordinates.lng, s.coordinates.lat])
+                            .setPopup(new maplibregl.Popup({ offset: 10 })
+                                .setHTML(`<strong>Driver ${r.driverId}</strong><br>${s.address}`))
+                            .addTo(moveMapInstance);
+                        bounds.extend([s.coordinates.lng, s.coordinates.lat]);
+                    });
+                });
+
+                const me = document.createElement('div');
+                me.style.cssText = 'width:22px;height:22px;border-radius:50%;background:#fca311;'
+                    + 'border:3px solid #fff;box-shadow:0 0 12px rgba(252,163,17,.9);';
+                new maplibregl.Marker({ element: me })
+                    .setLngLat([stop.coordinates.lng, stop.coordinates.lat])
+                    .setPopup(new maplibregl.Popup({ offset: 14 })
+                        .setHTML(`<strong>${stop.address}</strong><br>moving this`))
+                    .addTo(moveMapInstance);
+                bounds.extend([stop.coordinates.lng, stop.coordinates.lat]);
+
+                if (!bounds.isEmpty()) moveMapInstance.fitBounds(bounds, { padding: 40, maxZoom: 11 });
+                setTimeout(() => moveMapInstance && moveMapInstance.resize(), 120);
+            });
+        }
+
+        window.selectAllMovePkgs = (on) => {
+            document.querySelectorAll('#movePkgList .move-pkg').forEach(row => {
+                if (row.style.display === 'none') return;
+                const cb = row.querySelector('input');
+                if (cb.checked !== on) { cb.checked = on; toggleMovePkg(cb.value, cb); }
+            });
+        };
+
+        function filterMovePkgs() {
+            const q = (document.getElementById('movePkgSearch').value || '').trim().toUpperCase();
+            document.querySelectorAll('#movePkgList .move-pkg').forEach(row => {
+                row.style.display = !q || row.dataset.tba.toUpperCase().includes(q) ? 'flex' : 'none';
+            });
+        }
+
+        window.setMoveScope = (scope) => {
+            document.getElementById('movePkgSection').style.display = scope === 'some' ? 'block' : 'none';
+            if (scope === 'all') {
+                pendingMove.selected.clear();
+                document.querySelectorAll('.move-pkg input[type=checkbox]').forEach((cb, i) => {
+                    cb.checked = false;
+                    const row = document.getElementById('mp_' + i);
+                    if (row) row.classList.remove('picked');
+                });
+                const c = document.getElementById('moveCount');
+                if (c) c.textContent = 'none selected';
+            }
+            refreshMoveApply();
+        };
+
+        window.toggleMovePkg = (tba, cb) => {
+            const on = cb ? cb.checked : !pendingMove.selected.has(tba);
+            if (on) pendingMove.selected.add(tba);
+            else pendingMove.selected.delete(tba);
+
+            const row = document.querySelector(`.move-pkg[data-tba="${tba}"]`);
+            if (row) row.classList.toggle('picked', on);
+
+            const n = pendingMove.selected.size;
+            document.getElementById('moveCount').textContent =
+                n === 0 ? 'none selected' : `${n} of ${pendingMove.tbas.length} selected`;
+            refreshMoveApply();
+        };
+
+        window.chooseMoveTarget = (el, driverId) => {
+            document.querySelectorAll('.move-target').forEach(t => t.classList.remove('chosen'));
+            el.classList.add('chosen');
+            pendingMove.toDriverId = driverId;
+            refreshMoveApply();
+        };
+
+        function refreshMoveApply() {
+            const scope = document.querySelector('input[name=moveScope]:checked');
+            const partial = scope && scope.value === 'some';
+            const ok = pendingMove && pendingMove.toDriverId
+                && (!partial || pendingMove.selected.size > 0);
+            document.getElementById('moveApply').disabled = !ok;
+        }
+
+        document.getElementById('moveApply').addEventListener('click', async () => {
+            if (!pendingMove || !pendingMove.toDriverId) return;
+            const scope = document.querySelector('input[name=moveScope]:checked');
+            const partial = scope && scope.value === 'some';
+
+            const btn = document.getElementById('moveApply');
+            btn.disabled = true;
+            btn.textContent = 'Moving...';
+            document.getElementById('moveError').textContent = '';
+
+            const scopeLabel = partial
+                ? `${pendingMove.selected.size} pkg from ${pendingMove.address}`
+                : `${pendingMove.address}`;
+            pushUndo(`${scopeLabel} \u2192 driver ${pendingMove.toDriverId}`);
+
+            try {
+                const res = await fetch('/reassign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        routes: allCalculatedRoutes,
+                        config: configOverrides,
+                        move: {
+                            fromDriverId: pendingMove.fromDriverId,
+                            toDriverId: pendingMove.toDriverId,
+                            address: pendingMove.address,
+                            tbas: partial ? [...pendingMove.selected] : null
+                        }
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) throw new Error(data.error || 'Move failed');
+
+                allCalculatedRoutes = data.routes;
+                rebuildTbaLookup(data.routes);
+                renderGroupedView(data.routes);
+                renderRoutesOnMap(data.routes);
+                renderMetrics(lastFleetMetrics, data.fleetMileage);
+                renderValidation(data.routes, data.validation);
+
+                closePage('movePage');
+                renderUndoBar();
+                flashMoveResult(data.moved, data.validation);
+            } catch (e) {
+                // The move never happened, so drop the snapshot we just took
+                moveHistory.pop();
+                renderUndoBar();
+                document.getElementById('moveError').textContent = e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Move packages';
+            }
+        });
+
+        // Brief confirmation, and a nudge to the review list if the move broke something
+        function showToast(html, kind, ms) {
+            const el = document.getElementById('moveToast');
+            el.className = 'move-toast toast-' + (kind || 'ok');
+            el.innerHTML = html;
+            el.style.display = 'block';
+            clearTimeout(el._t);
+            el._t = setTimeout(() => { el.style.display = 'none'; }, ms || 6000);
+        }
+
+        function flashMoveResult(moved, validation) {
+            const kind = validation.errors ? 'error' : validation.warnings ? 'warn' : 'ok';
+            // The move went through either way. Say so plainly, so an over-limit
+            // result does not read like the move was rejected.
+            const tail = validation.errors
+                ? ` <strong>Done, but ${validation.errors} route${validation.errors > 1 ? 's are' : ' is'} `
+                  + `past a hard limit.</strong> Check before dispatch.`
+                : validation.warnings
+                    ? ` Done. ${validation.warnings} route${validation.warnings > 1 ? 's are' : ' is'} close to a limit.`
+                    : ' All checks still pass.';
+            showToast(`Moved ${moved.count} package${moved.count > 1 ? 's' : ''} from ${moved.address}.` + tail,
+                      kind, validation.errors ? 9000 : 6000);
+        }
+
+        function rebuildTbaLookup(routes) {
+            tbaLookup = {};
+            routes.forEach(r => {
+                let n = 0;
+                r.route.forEach(s => {
+                    if (isWarehouse(s)) return;
+                    n++;
+                    s.tbas.forEach(t => {
+                        tbaLookup[t.trim().toUpperCase()] =
+                            { d: r.driverId, s: n, eta: s.etaSeconds };
+                    });
+                });
+            });
+        }
+
+        function renderIssues(issues) {
+            if (!issues || issues.length === 0) return '';
+            return issues.map(i =>
+                `<div class="issue issue-${i.severity}">${i.severity === 'error' ? '\u26A0 ' : ''}${i.message}</div>`
+            ).join('');
+        }
+
+        // Running arrival time per stop: drive time plus however long the
+        // packages before it take to hand over.
+        function renderEtaList(route, driverId) {
+            let html = '';
+            let stopNum = 0;
+            route.forEach(s => {
+                if (isWarehouse(s)) return;
+                stopNum++;
+                const clock = formatClock(s.etaSeconds);
+                const elapsed = formatElapsed(s.etaSeconds);
+                // Show clock time when a departure time is set, elapsed otherwise
+                const primary = clock || elapsed;
+                const secondary = clock ? `<span class="eta-elapsed">${elapsed} in</span>` : '';
+                const tbaId = `tbas_${Math.random().toString(36).slice(2, 9)}`;
+                html += `<div class="eta-row">
+                    <span class="eta-time">${primary}</span>
+                    <span class="eta-where">${stopNum}. ${s.address}</span>
+                    <span class="eta-count">${s.tbas.length} pkg</span>
+                    ${secondary}
+                    <span class="eta-toggle" onclick="toggleTbas('${tbaId}', this)">show</span>
+                    ${driverId !== null && driverId !== undefined
+                        ? `<span class="eta-move" onclick="openMoveDialog('${driverId}', '${s.address}')">move</span>` : ''}
+                </div>`;
+                html += `<div class="eta-tbas" id="${tbaId}" style="display:none;">${s.tbas.join(', ')}</div>`;
+            });
+            return html;
+        }
+
+        window.toggleTbas = (id, el) => {
+            const box = document.getElementById(id);
+            const open = box.style.display !== 'none';
+            box.style.display = open ? 'none' : 'block';
+            el.textContent = open ? 'show' : 'hide';
+        };
+
+        // =====================================================
+        // CONSTRAINT EDITOR
+        // =====================================================
+        const CFG_GROUPS = [
+            { title: 'Capacity and service', keys: ['VAN_CAPACITY', 'SECONDS_PER_PKG', 'PACKING_EFFICIENCY'] },
+            { title: 'Anti-sprawl', keys: ['MAX_LOCAL_DRIVE_SHARE', 'ABSOLUTE_MAX_STEP',
+                                           'ORPHAN_MAX_ATTACH', 'SANITY_MAX_DIAMETER',
+                                           'DIAMETER_GROWTH_PENALTY'] },
+            { title: 'Route size by block length', keys: ['BASE_STEM_SECONDS', 'STEM_PER_HOUR', 'BASE_MAX_DIAMETER', 'DIAMETER_PER_HOUR', 'BASE_STEP_LIMIT', 'STEP_PER_HOUR'] },
+                        { title: 'Clustering preferences',
+              keys: ['SAME_AREA_BONUS', 'NEAR_AREA_SECONDS', 'NEAR_AREA_BONUS', 'PKG_COUNT_BONUS',
+                     'TIE_TOLERANCE_SECONDS', 'FAIR_SHARE_SLACK'] },
+            { title: 'Where each driver starts',
+              keys: ['SEED_PACKAGE_WEIGHT', 'SEED_NEARBY_WEIGHT',
+                     'SEED_SPREAD_WEIGHT', 'SEED_STEM_WEIGHT'] },
+            { title: 'Traffic', keys: ['TRAFFIC_CITY', 'TRAFFIC_HIGHWAY'] },
+            { title: 'Mileage and cost',
+              keys: ['FUEL_PRICE_PER_GAL', 'MPG_SEDAN', 'MPG_SUV', 'MPG_TRUCK', 'COST_PER_MILE'] },
+            { title: 'Remote area flagging',
+              keys: ['REMOTE_ISOLATION_SECONDS', 'REMOTE_STEM_SECONDS'] },
+            { title: 'Relaxation (what happens when no nearby stop fits)',
+              keys: ['RELAX_DIAMETER_STEP', 'RELAX_STEP_STEP'] },
+            { title: 'Package sizing',
+              keys: ['FLAT_MAX_MIN_DIM_CM', 'FLAT_MAX_VOLUME_L', 'FLAT_VOLUME_FACTOR',
+                     'SIZE_SMALL_MAX', 'SIZE_MEDIUM_MAX', 'SIZE_LARGE_MAX'] },
+        ];
+
+        // Times are edited in minutes. Nobody wants to type 1800 to mean 30 min.
+        function displayValue(entry, v) {
+            if (entry.unit === 'sec') return +(v / 60).toFixed(2).replace(/\.00$/, '');
+            return +(+v).toFixed(2);
+        }
+        function toInternal(entry, displayed) {
+            const v = parseFloat(displayed);
+            if (!isFinite(v)) return null;
+            return entry.unit === 'sec' ? v * 60 : v;
+        }
+        function displayUnit(entry) {
+            if (entry.unit === 'sec') return 'min';
+            if (entry.unit === 'x') return '\u00D7';
+            return entry.unit;
+        }
+        function displayStep(entry) {
+            if (entry.unit === 'sec') return 0.5;
+            return entry.step;
+        }
+
+        function fmtCfg(entry, v) {
+            if (entry.unit === 'sec') {
+                return v >= 60 ? (v / 60).toFixed(v % 60 === 0 ? 0 : 1) + ' min' : v + ' sec';
+            }
+            if (entry.unit === 'x') return (+v).toFixed(2) + '\u00D7';
+            return v + ' ' + entry.unit;
+        }
+
+        async function ensureConfigSchema() {
+            if (configSchema) return true;
+            try {
+                const res = await fetch('/config-schema');
+                const data = await res.json();
+                configSchema = data.schema;
+                configDefaults = data.defaults;
+                vehicleSchema = data.vehicleSchema || null;
+                vehicleDefaults = data.vehicleDefaults || {};
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        document.getElementById('openConstraints').addEventListener('click', async () => {
+            const ok = await ensureConfigSchema();
+            if (!ok) return alert('Could not load the constraint list from the server.');
+            renderConstraintEditor();
+            openPage('cfgPage');
+        });
+
+        function renderConstraintEditor() {
+            const byKey = {};
+            configSchema.forEach(s => { byKey[s.key] = s; });
+
+            let html = `<div class="cmp-note" style="margin-bottom:14px;">
+                Drag the slider or type a value directly. Times are entered in minutes.
+                Out-of-range entries snap to the nearest allowed value. Changes apply to the next
+                calculation and are not saved, so reloading the page restores every default.
+            </div>`;
+
+            CFG_GROUPS.forEach(group => {
+                const rows = group.keys.filter(k => byKey[k]);
+                if (rows.length === 0) return;
+                html += `<div class="cfg-group"><h3>${group.title}</h3>`;
+                rows.forEach(k => {
+                    const s = byKey[k];
+                    const cur = (k in configOverrides) ? configOverrides[k] : configDefaults[k];
+                    const changed = (k in configOverrides) && configOverrides[k] !== configDefaults[k];
+                    if (s.type === 'bool') {
+                        const on = (k in configOverrides) ? !!configOverrides[k] : !!configDefaults[k];
+                        html += `<div class="cfg-row">
+                            <div>
+                                <div class="cfg-label">${s.label}</div>
+                                <div class="cfg-help">${s.help}</div>
+                            </div>
+                            <label class="switch" style="justify-self:start;">
+                                <input type="checkbox" id="cfg_${k}" ${on ? 'checked' : ''}
+                                       onchange="updateToggle('${k}', this.checked)">
+                                <span class="switch-track"></span>
+                            </label>
+                            <div class="cfg-val ${on !== !!configDefaults[k] ? 'changed' : ''}" id="cfgv_${k}">${on ? 'On' : 'Off'}</div>
+                        </div>`;
+                        return;
+                    }
+                    const disp = displayValue(s, cur);
+                    html += `<div class="cfg-row">
+                        <div>
+                            <div class="cfg-label">${s.label}</div>
+                            <div class="cfg-help">${s.help}</div>
+                        </div>
+                        <input type="range" id="cfg_${k}" min="${s.min}" max="${s.max}" step="${s.step}"
+                               value="${cur}" oninput="updateConstraint('${k}', this.value, 'slider')">
+                        <div class="cfg-entry">
+                            <input type="number" class="cfg-num ${changed ? 'changed' : ''}" id="cfgn_${k}"
+                                   min="${displayValue(s, s.min)}" max="${displayValue(s, s.max)}"
+                                   step="${displayStep(s)}" value="${disp}"
+                                   onchange="updateConstraint('${k}', this.value, 'typed')">
+                            <span class="cfg-unit">${displayUnit(s)}</span>
+                        </div>
+                    </div>`;
+                });
+                html += `</div>`;
+            });
+
+            // Vehicle capacities, one block per tier with a live usable figure
+            if (vehicleSchema && vehicleSchema.length) {
+                const byTier = {};
+                vehicleSchema.forEach(s => {
+                    const tier = s.key.split('.')[1];
+                    (byTier[tier] = byTier[tier] || []).push(s);
+                });
+
+                html += `<div class="cfg-group"><h3>Vehicle capacities</h3>
+                    <div class="cfg-help" style="margin-bottom:10px;">
+                        Zone volumes are raw space. Usable volume is the total multiplied by packing
+                        efficiency, since boxes never fill a space completely. The longest-item limit
+                        is separate from volume: a long package can fit by cubic and still not go
+                        through the opening.
+                    </div>`;
+
+                Object.keys(byTier).forEach(tier => {
+                    html += `<div class="veh-block">
+                        <div class="veh-head">
+                            <span>${tier}</span>
+                            <span class="veh-usable" id="usable_${tier}"></span>
+                        </div>`;
+                    byTier[tier].forEach(s => {
+                        const cur = (s.key in configOverrides) ? configOverrides[s.key] : vehicleDefaults[s.key];
+                        const changed = (s.key in configOverrides) && configOverrides[s.key] !== vehicleDefaults[s.key];
+                        html += `<div class="cfg-row">
+                            <div>
+                                <div class="cfg-label">${s.label.split('—')[1].trim()}</div>
+                                <div class="cfg-help">${s.help}</div>
+                            </div>
+                            <input type="range" id="cfg_${s.key}" min="${s.min}" max="${s.max}" step="${s.step}"
+                                   value="${cur}" oninput="updateVehicle('${s.key}', this.value, 'slider')">
+                            <div class="cfg-entry">
+                                <input type="number" class="cfg-num ${changed ? 'changed' : ''}" id="cfgn_${s.key}"
+                                       min="${s.min}" max="${s.max}" step="${s.step}" value="${cur}"
+                                       onchange="updateVehicle('${s.key}', this.value, 'typed')">
+                                <span class="cfg-unit">${s.unit}</span>
+                            </div>
+                        </div>`;
+                    });
+                    html += `</div>`;
+                });
+                html += `</div>`;
+            }
+
+            document.getElementById('cfgBody').innerHTML = html;
+            refreshUsableVolumes();
+        }
+
+        // Keeps the usable-volume line under each vehicle heading up to date
+        function refreshUsableVolumes() {
+            if (!vehicleSchema) return;
+            const eff = ('PACKING_EFFICIENCY' in configOverrides)
+                ? configOverrides.PACKING_EFFICIENCY : configDefaults.PACKING_EFFICIENCY;
+            const tiers = [...new Set(vehicleSchema.map(s => s.key.split('.')[1]))];
+            tiers.forEach(tier => {
+                const val = f => {
+                    const k = `veh.${tier}.${f}`;
+                    return (k in configOverrides) ? configOverrides[k] : vehicleDefaults[k];
+                };
+                const gross = val('trunk') + val('rearSeat') + val('frontPassenger');
+                const usable = Math.round(gross * eff);
+                const el = document.getElementById('usable_' + tier);
+                if (el) el.textContent = `${gross} L raw → ${usable} L usable · max ${val('maxDimCm')} cm`;
+            });
+        }
+
+        window.updateVehicle = (key, value, source) => {
+            const entry = vehicleSchema.find(s => s.key === key);
+            if (!entry) return;
+            let v = parseFloat(value);
+            if (!isFinite(v)) {
+                document.getElementById('cfgn_' + key).value =
+                    (key in configOverrides) ? configOverrides[key] : vehicleDefaults[key];
+                return;
+            }
+            const clamped = Math.min(entry.max, Math.max(entry.min, v));
+            const wasClamped = clamped !== v;
+            v = clamped;
+            configOverrides[key] = v;
+
+            const slider = document.getElementById('cfg_' + key);
+            const num = document.getElementById('cfgn_' + key);
+            if (slider) slider.value = v;
+            if (num && (source === 'slider' || wasClamped)) num.value = v;
+            if (num) num.classList.toggle('changed', v !== vehicleDefaults[key]);
+            if (wasClamped && num) {
+                num.classList.add('cfg-clamped');
+                setTimeout(() => num.classList.remove('cfg-clamped'), 900);
+            }
+            refreshUsableVolumes();
+        };
+
+        window.updateConstraint = (key, value, source) => {
+            const entry = configSchema.find(s => s.key === key);
+            if (!entry) return;
+
+            // Typed values arrive in minutes, slider values are already raw seconds
+            let v = source === 'typed' ? toInternal(entry, value) : parseFloat(value);
+            if (v === null || !isFinite(v)) {
+                // Garbage in the box, put the last good value back
+                document.getElementById('cfgn_' + key).value =
+                    displayValue(entry, key in configOverrides ? configOverrides[key] : configDefaults[key]);
+                return;
+            }
+
+            // Snap into range, and flash the box if we had to
+            const clamped = Math.min(entry.max, Math.max(entry.min, v));
+            const wasClamped = clamped !== v;
+            v = clamped;
+            configOverrides[key] = v;
+
+            const slider = document.getElementById('cfg_' + key);
+            const num = document.getElementById('cfgn_' + key);
+            if (slider) slider.value = v;
+            if (num && (source === 'slider' || wasClamped)) num.value = displayValue(entry, v);
+            if (num) num.classList.toggle('changed', v !== configDefaults[key]);
+
+            if (wasClamped && num) {
+                num.classList.add('cfg-clamped');
+                setTimeout(() => num.classList.remove('cfg-clamped'), 900);
+            }
+            if (key === 'PACKING_EFFICIENCY') refreshUsableVolumes();
+        };
+
+        window.updateToggle = (key, on) => {
+            configOverrides[key] = !!on;
+            const lbl = document.getElementById('cfgv_' + key);
+            if (lbl) {
+                lbl.textContent = on ? 'On' : 'Off';
+                lbl.classList.toggle('changed', !!on !== !!configDefaults[key]);
+            }
+        };
+
+        window.resetConstraints = () => {
+            configOverrides = {};
+            renderConstraintEditor();
+        };
+
+        function renderGroupedView(routes) {
+            const container = document.getElementById('routeList');
+            container.innerHTML = '';
+            const groups = {};
+            routes.forEach(r => {
+                let key = r.driverId.toString().includes("OVERFLOW") ? "OVERFLOW" : r.driverMax.toString();
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(r);
+            });
+            Object.keys(groups).sort().forEach(key => {
+                const groupRoutes = groups[key];
+                const unassignedCount = groupRoutes.reduce((s, r) =>
+                    s + r.route.reduce((t, st) => t + (isWarehouse(st) ? 0 : st.tbas.length), 0), 0);
+                const headerText = key === "OVERFLOW"
+                    ? `Unassigned — ${unassignedCount} package(s) need a driver`
+                    : `${key} Hour Blocks (${groupRoutes.length})`;
+                const color = key === "OVERFLOW" ? "red" : "#2a9d8f";
+                const header = document.createElement('div');
+                header.className = 'group-header';
+                header.style.borderColor = color;
+                header.innerHTML = `<span>${headerText}</span> <span style="font-size:0.8em">▼</span>`;
+                const content = document.createElement('div');
+                content.className = 'group-content';
+                header.onclick = () => { toggleAccordion(content); filterMapByGroup(key); };
+                groupRoutes.forEach(r => {
+                    const card = document.createElement('div');
+                    card.className = 'driver-card';
+                    let pkgCount = 0;
+                    let allTbas = [];
+                    r.route.forEach((s) => {
+                        if (isWarehouse(s)) return;
+                        pkgCount += s.tbas.length;
+                        allTbas.push(...s.tbas);
+                    });
+                    const dName = key === "OVERFLOW" ? "Overflow" : `Driver ${r.driverId}`;
+                    const driverColor = key === "OVERFLOW" ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                    const nameEl = document.createElement('div');
+                    nameEl.className = 'driver-name-header';
+                    nameEl.style.fontWeight = 'bold';
+                    nameEl.style.color = driverColor;
+                    nameEl.style.cursor = 'copy';
+                    nameEl.title = 'Click Name to Copy TBAs';
+                    nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} <span style="font-size:0.8em; color:#888;">📋</span>`;
+                    nameEl.onclick = (e) => {
+                        e.stopPropagation();
+                        const textToCopy = allTbas.join('\r\n');
+                        navigator.clipboard.writeText(textToCopy).then(() => {
+                            const originalHTML = nameEl.innerHTML;
+                            nameEl.innerHTML = `<span style="display:inline-block;width:20px;height:20px;background:${driverColor};border-radius:50%;text-align:center;line-height:20px;font-size:10px;color:white;margin-right:5px;">${r.driverId}</span> ${dName} ✅`;
+                            setTimeout(() => nameEl.innerHTML = originalHTML, 1000);
+                        });
+                    };
+                    const infoEl = document.createElement('div');
+                    infoEl.style.fontSize = '0.85em';
+                    infoEl.style.color = '#ccc';
+                    infoEl.style.marginTop = '4px';
+
+                    const reqTier = r.requiredVehicle && TIER_BY_ID[r.requiredVehicle]
+                        ? TIER_BY_ID[r.requiredVehicle] : null;
+                    const vehBadge = key === "OVERFLOW" ? ''
+                        : reqTier
+                            ? `<span class="veh-badge" style="background:${reqTier.color};color:#121212;">${reqTier.label}</span>`
+                            : `<span class="veh-badge" style="background:#d90429;color:#fff;">Won't fit</span>`;
+
+                    const volText = r.totalVolumeL !== undefined
+                        ? ` • ${Math.round(r.totalVolumeL)} L` : '';
+
+                    infoEl.innerHTML = `${pkgCount} Pkgs • ${formatHours(r.totalHours)}${volText} ${vehBadge}`;
+
+                    // Capacity meter against the vehicle actually assigned
+                    if (r.assignedVehicle && TIER_BY_ID[r.assignedVehicle] && key !== "OVERFLOW") {
+                        const cap = TIER_BY_ID[r.assignedVehicle].usableL;
+                        const pct = Math.min(100, Math.round((r.totalVolumeL / cap) * 100));
+                        const fillColor = pct > 90 ? '#d90429' : pct > 70 ? '#fca311' : '#2a9d8f';
+                        const meter = document.createElement('div');
+                        meter.className = 'capacity-meter';
+                        meter.title = `${Math.round(r.totalVolumeL)}L of ${cap}L usable in a ${TIER_BY_ID[r.assignedVehicle].label}`;
+                        meter.innerHTML = `<div class="capacity-fill" style="width:${pct}%;background:${fillColor}"></div>`;
+                        infoEl.appendChild(meter);
+                    }
+
+                    if (r.vehicleWarning) {
+                        const warn = document.createElement('div');
+                        warn.className = 'veh-warn';
+                        warn.textContent = r.vehicleWarning;
+                        infoEl.appendChild(warn);
+                    }
+
+                    if (r.manuallyAdjusted && key !== "OVERFLOW") {
+                        const badge = document.createElement('div');
+                        badge.className = 'manual-badge';
+                        const hasErr = (r.issues || []).some(i => i.severity === 'error');
+                        badge.textContent = hasErr
+                            ? 'Hand-adjusted \u00B7 over a limit, allowed on purpose'
+                            : 'Hand-adjusted';
+                        if (hasErr) badge.classList.add('manual-badge-over');
+                        infoEl.appendChild(badge);
+                    }
+
+                    if (r.mileage && key !== "OVERFLOW" && r.mileage.miles > 0) {
+                        // Two different numbers, so label them. Gas is what comes out
+                        // of the driver's pocket today; running cost is the all-in
+                        // per-mile figure including wear and depreciation.
+                        const mi = document.createElement('div');
+                        mi.className = 'route-mileage';
+                        mi.innerHTML = `${r.mileage.miles} mi`
+                            + ` &middot; gas <strong>$${r.mileage.fuelCost}</strong>`
+                            + ` <span class="cost-dim">(${r.mileage.gallons} gal)</span>`
+                            + ` &middot; all-in <strong>$${r.mileage.runningCost}</strong>`
+                            + ` <span class="cost-dim">$${r.mileage.costPerPackage}/pkg</span>`;
+                        infoEl.appendChild(mi);
+                    }
+
+                    // Safety issues introduced by a manual move
+                    if (r.issues && r.issues.length > 0) {
+                        const box = document.createElement('div');
+                        box.innerHTML = renderIssues(r.issues);
+                        infoEl.appendChild(box);
+                    }
+                    const listEl = document.createElement('div');
+                    listEl.style.marginTop = '5px';
+                    listEl.style.paddingTop = '5px';
+                    listEl.style.borderTop = '1px solid #444';
+                    let listHtml = '';
+                    if (key !== "OVERFLOW") {
+                        listHtml = renderEtaList(r.route, r.driverId);
+                    } else if (key === "OVERFLOW") {
+                        // Say why, per stop. A bare list tells the dispatcher nothing.
+                        // Each one gets a move link too: unassigned packages are
+                        // exactly the ones you most want to hand to a driver.
+                        r.route.forEach(s => {
+                            if (isWarehouse(s)) return;
+                            listHtml += `<div class="tba-row" style="border-left-color:#d90429;">
+                                <div class="ovf-head">
+                                    <strong style="color:#ff6b6b;">${s.address}</strong>
+                                    <span style="color:#999;">${s.tbas.length} pkg</span>
+                                    <span class="eta-move" onclick="openMoveDialog('OVERFLOW', '${s.address}')">assign</span>
+                                </div>
+                                <div style="color:#999; margin-top:2px;">${s.overflowReason || 'No reason recorded'}</div>
+                                ${s.tbas.map(t => `<div style="color:#777;">${t}</div>`).join('')}
+                            </div>`;
+                        });
+                    }
+                    listEl.innerHTML = listHtml;
+                    card.appendChild(nameEl);
+                    card.appendChild(infoEl);
+                    card.appendChild(listEl);
+                    card.onclick = () => {
+                        filterMapByDriver(r.driverId);
+                        document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+                        card.classList.add('selected');
+                    };
+                    content.appendChild(card);
+                });
+                container.appendChild(header);
+                container.appendChild(content);
+            });
+        }
+
+        function toggleAccordion(el) {
+            el.style.display = el.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function createNumberedMarker(lat, lng, number, color, isBag = false) {
+            const el = document.createElement('div');
+            el.className = isBag ? 'driver-marker bag-marker' : 'driver-marker';
+            const size = isBag ? 32 : 26;
+            el.style.width = `${size}px`;
+            el.style.height = `${size}px`;
+            el.style.backgroundColor = isBag ? '#f1faee' : color;
+            el.style.color = isBag ? color : 'white';
+            el.style.borderColor = isBag ? color : 'white';
+            el.style.fontSize = isBag ? '11px' : '12px';
+            el.innerText = number;
+            const marker = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]);
+            return marker;
+        }
+
+        function buildMap(routes) {
+            mapLayers.forEach(obj => obj.marker.remove());
+            mapLayers = [];
+            if (map.getLayer('route-lines')) map.removeLayer('route-lines');
+            if (map.getSource('route-lines')) map.removeSource('route-lines');
+
+            let allPoints = [];
+            let geoJsonFeatures = [];
+
+            routes.forEach((r) => {
+                const isOverflow = r.driverId.toString().includes("OVERFLOW");
+                const color = isOverflow ? "#666" : DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
+                const driverNum = isOverflow ? "?" : r.driverId;
+                const groupKey = isOverflow ? "OVERFLOW" : r.driverMax.toString();
+
+                let lineCoordinates = r.route.map(s => [s.coordinates.lng, s.coordinates.lat]);
+                geoJsonFeatures.push({
+                    'type': 'Feature',
+                    'properties': { 'color': color, 'driverId': r.driverId, 'groupKey': groupKey },
+                    'geometry': { 'type': 'LineString', 'coordinates': lineCoordinates }
+                });
+
+                r.route.forEach((stop) => {
+                    if (isWarehouse(stop)) return;
+                    const isBag = stop.isBag;
+                    const displayNum = isBag ? `B${driverNum}` : driverNum;
+                    const marker = createNumberedMarker(stop.coordinates.lat, stop.coordinates.lng, displayNum, color, isBag);
+
+                    const popup = new maplibregl.Popup({ offset: 25, closeButton: false }).setHTML(`
+                        <strong style="color:${color}">Driver ${driverNum}</strong><br>
+                        ${stop.address}<br>
+                        <span style="color:#aaa">${stop.tbas ? stop.tbas.length : 0} packages</span>
+                        ${isBag ? '<br><em style="color:#9b5de5">📦 Bag</em>' : ''}
+                    `);
+                    
+                    marker.setPopup(popup);
+                    marker.addTo(map);
+                    mapLayers.push({ marker: marker, driverId: r.driverId, groupKey: groupKey });
+                    allPoints.push([stop.coordinates.lng, stop.coordinates.lat]);
+                });
+            });
+
+            // GHOST MODE LINES
+            map.addSource('route-lines', {
+                'type': 'geojson',
+                'data': { 'type': 'FeatureCollection', 'features': geoJsonFeatures }
+            });
+
+            map.addLayer({
+                'id': 'route-lines',
+                'type': 'line',
+                'source': 'route-lines',
+                'layout': { 'line-join': 'round', 'line-cap': 'round' },
+                'paint': {
+                    'line-color': ['get', 'color'],
+                    'line-width': 3,
+                    'line-opacity': 0.4  // Increased to 0.4 for better visibility (was 0.15)
+                }
+            });
+
+            if (allPoints.length) {
+                const bounds = new maplibregl.LngLatBounds();
+                allPoints.forEach(p => bounds.extend(p));
+                map.fitBounds(bounds, { padding: 80 });
+            }
+        }
+
+        // --- FILTERS (FOCUS MODE) ---
+        function filterMapByGroup(groupKey) {
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                if (obj.groupKey === groupKey) {
+                    el.style.display = '';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'groupKey', groupKey]);
+                map.setPaintProperty('route-lines', 'line-opacity', 0.8);
+                map.setPaintProperty('route-lines', 'line-width', 4);
+            }
+        }
+
+        function filterMapByDriver(dId) {
+            // MARKERS: Hide everyone except selected
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                if (obj.driverId === dId) {
+                    el.style.display = '';
+                    el.style.zIndex = '1000'; 
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+
+            // LINES: Focus Mode
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', ['==', 'driverId', dId]);
+                map.setPaintProperty('route-lines', 'line-opacity', 1.0); // Neon Bright
+                map.setPaintProperty('route-lines', 'line-width', 6);    // Extra Thick
+            }
+        }
+
+        window.resetMapFilter = () => {
+            mapLayers.forEach(obj => {
+                const el = obj.marker.getElement();
+                el.style.display = ''; 
+                el.style.zIndex = ''; 
+            });
+            document.querySelectorAll('.driver-card').forEach(c => c.classList.remove('selected'));
+
+            if (map.getLayer('route-lines')) {
+                map.setFilter('route-lines', null); 
+                map.setPaintProperty('route-lines', 'line-opacity', 0.4); // Back to Default
+                map.setPaintProperty('route-lines', 'line-width', 3);
+            }
+        };
+
+        function formatHours(h) { const hr = Math.floor(h); const mn = Math.round((h - hr) * 60); return `${hr}h ${mn}m`; }
+
+        // Time since leaving the warehouse, written how a person would say it.
+        // Minutes under the hour. Nobody reads "+0h 6m".
+        function formatElapsed(seconds) {
+            if (seconds === undefined || seconds === null) return '--';
+            const total = Math.round(seconds / 60);
+            if (total < 60) return `${total} min`;
+            const hr = Math.floor(total / 60);
+            const mn = total % 60;
+            return mn === 0 ? `${hr} hr` : `${hr}h ${String(mn).padStart(2, '0')}m`;
+        }
+
+        // Actual clock time, once you tell it when the driver leaves
+        function formatClock(seconds) {
+            if (seconds === undefined || seconds === null) return '';
+            const dep = document.getElementById('departTime');
+            if (!dep || !dep.value) return '';
+            const [h, m] = dep.value.split(':').map(Number);
+            if (!isFinite(h) || !isFinite(m)) return '';
+            const d = new Date();
+            d.setHours(h, m, 0, 0);
+            d.setSeconds(d.getSeconds() + seconds);
+            return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+
+        function buildLookup(routes) {
+            tbaLookup = {};
+            routes.forEach(r => {
+                let stopNum = 0;
+                r.route.forEach(s => {
+                    if (isWarehouse(s)) return;
+                    stopNum++;
+                    s.tbas.forEach(t => tbaLookup[t.trim().toUpperCase()] =
+                        { d: r.driverId, s: stopNum, z: s.address, eta: s.etaSeconds });
+                });
+            });
+        }
+
+        // Looks in both the routed packages and the screened-out ones, so an FC
+        // package gets identified as one instead of falling through to not found.
+        function resolveScan(val) {
+            if (tbaLookup[val]) return { type: 'route', tba: val, info: tbaLookup[val] };
+            if (exceptionLookup[val]) return { type: 'exception', tba: val, info: exceptionLookup[val] };
+
+            // Partial scan, last few digits. Has to search both lists or you get
+            // false collisions.
+            const matches = [
+                ...Object.keys(tbaLookup).map(t => ({ t, where: 'route' })),
+                ...Object.keys(exceptionLookup).map(t => ({ t, where: 'exception' }))
+            ].filter(m => m.t.endsWith(val));
+
+            if (matches.length === 1) {
+                const m = matches[0];
+                return m.where === 'route'
+                    ? { type: 'route', tba: m.t, info: tbaLookup[m.t] }
+                    : { type: 'exception', tba: m.t, info: exceptionLookup[m.t] };
+            }
+            if (matches.length > 1) return { type: 'multiple', count: matches.length };
+            return { type: 'none' };
+        }
+
+        function say(text) {
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+
+        document.getElementById('scanInput').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const val = e.target.value.trim().toUpperCase();
+            e.target.value = '';
+            if (!val) return;
+
+            const dDisp = document.getElementById('driverDisplay');
+            const sDisp = document.getElementById('stopDisplay');
+            const r = resolveScan(val);
+
+            if (r.type === 'multiple') {
+                dDisp.style.color = '#fca311';
+                dDisp.style.fontSize = '40px';
+                dDisp.textContent = 'MULTIPLE';
+                sDisp.textContent = `${r.count} packages end in "${val}". Scan more digits.`;
+                say('Multiple matches');
+                return;
+            }
+
+            if (r.type === 'exception') {
+                const isFC = r.info.kind === 'FC';
+                dDisp.style.color = isFC ? '#f032e6' : '#fca311';
+                dDisp.style.fontSize = isFC ? '30px' : '34px';
+                dDisp.textContent = isFC ? 'FC RETURN' : 'HOLD';
+                sDisp.innerHTML = isFC
+                    ? `Not for delivery &mdash; goes back to the fulfillment center` +
+                      `<br><span style="font-size:0.85em; color:#aaa;">Destination ${r.info.destination || 'n/a'}</span>` +
+                      `<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`
+                    : `Non-residential, held by the residential-only switch` +
+                      `<br><span style="font-size:0.85em; color:#aaa;">${r.info.addressType || 'unknown type'} &middot; ZIP ${r.info.postal || '--'}</span>` +
+                      `<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`;
+                say(isFC ? 'Fulfillment center return' : 'Hold, not residential');
+                return;
+            }
+
+            if (r.type === 'route') {
+                const info = r.info;
+                const isOverflow = info.d.toString().includes('OVERFLOW');
+                dDisp.style.color = isOverflow ? '#fca311' : '#2a9d8f';
+                dDisp.style.fontSize = isOverflow ? '34px' : '40px';
+                dDisp.textContent = isOverflow ? 'OVERFLOW' : `DRIVER ${info.d}`;
+                const etaTxt = (info.eta !== undefined && info.eta !== null)
+                    ? ` &middot; ETA +${formatHours(info.eta / 3600)}` : '';
+                sDisp.innerHTML = isOverflow
+                    ? `No driver assigned<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`
+                    : `Stop #${info.s}${etaTxt}<br><span style="font-size:0.8em; color:#888;">${r.tba}</span>`;
+                say(isOverflow ? 'Overflow' : 'Driver ' + info.d);
+                return;
+            }
+
+            dDisp.style.color = '#d90429';
+            dDisp.style.fontSize = '34px';
+            dDisp.textContent = 'NOT FOUND';
+            sDisp.textContent = 'This tracking number is not in the loaded manifest.';
+            say('Not found');
+        });
+
+        // The scanner grabs focus back when you click away, so a barcode gun
+        // always lands in the right box. It used to do that unconditionally,
+        // which meant you couldn't type in any other field on the page: the
+        // clock, the driver dropdowns, the constraint editor all lost focus
+        // 100ms after you clicked them. Now it only reclaims focus when you
+        // clicked something that isn't itself a control.
+        (function keepScannerFocused() {
+            const scan = document.getElementById('scanInput');
+            // Checking document.activeElement isn't enough here. Safari on macOS
+            // doesn't focus buttons or selects when you click them, so
+            // activeElement stays on <body> and the scanner grabs the cursor
+            // straight back. That's why the clock and the driver buttons felt
+            // dead on a Mac. Watch what was actually clicked instead.
+            const CONTROL_SELECTOR = 'input, select, textarea, button, a, label, option, '
+                                   + '[contenteditable], .driver-card, .group-header, '
+                                   + '.eta-toggle, .zip-btn, .page-overlay';
+
+            let lastClickWasControl = false;
+            let lastClickAt = 0;
+
+            document.addEventListener('pointerdown', (e) => {
+                const t = e.target;
+                lastClickAt = Date.now();
+                lastClickWasControl = !!(t && t !== scan && t.closest && t.closest(CONTROL_SELECTOR));
+            }, true);
+
+            const shouldReclaim = () => {
+                if (document.getElementById('scanPanel').style.display === 'none') return false;
+                if (document.querySelector('.page-overlay.show')) return false;
+                // Something was clicked a moment ago, leave the user alone
+                if (lastClickWasControl && Date.now() - lastClickAt < 1500) return false;
+                const el = document.activeElement;
+                if (el && el !== scan && el !== document.body &&
+                    el.closest && el.closest(CONTROL_SELECTOR)) return false;
+                return true;
+            };
+
+            scan.addEventListener('blur', () => {
+                setTimeout(() => { if (shouldReclaim()) scan.focus(); }, 150);
+            });
+
+            document.getElementById('scanPanel').addEventListener('click', (e) => {
+                if (e.target === scan || !e.target.closest(CONTROL_SELECTOR)) scan.focus();
+            });
+        })();
+
+        document.getElementById('exportScannerCsv').addEventListener('click', () => {
+            let csv = "TBA,DRIVER,STOP,ZIP,VEHICLE,ROUTE_MILES,ROUTE_COST\n";
+            allCalculatedRoutes.forEach(r => {
+                let stopNum = 0;
+                r.route.forEach(s => {
+                    if (isWarehouse(s)) return;
+                    stopNum++;
+                    s.tbas.forEach(t => csv += `${t.trim()},${r.driverId},${stopNum},${s.address},${r.requiredVehicle || ''},${r.mileage ? r.mileage.miles : ''},${r.mileage ? r.mileage.runningCost : ''}\n`);
+                });
+            });
+            const b = new Blob([csv], { type: 'text/csv' });
+            const u = URL.createObjectURL(b);
+            const a = document.createElement('a'); a.href = u; a.download = `Lookup.csv`; a.click();
+        });
+    </script>
+</body>
+</html>
