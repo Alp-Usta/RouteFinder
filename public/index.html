@@ -2136,9 +2136,7 @@ TBA987654321,19020"></textarea>
 
         // Shared by both undo paths: put the plan back on screen and re-check it.
         function applyRestoredPlan(routes, message) {
-            rebuildTbaLookup(routes);
-            renderGroupedView(routes);
-            renderRoutesOnMap(routes);
+            refreshPlanViews(routes);
             renderMetrics(lastFleetMetrics);
             const errs = routes.reduce((a, r) =>
                 a + ((r.issues || []).filter(i => i.severity === 'error').length), 0);
@@ -2427,10 +2425,8 @@ TBA987654321,19020"></textarea>
                 if (!res.ok || data.error) throw new Error(data.error || 'Move failed');
 
                 allCalculatedRoutes = data.routes;
-                rebuildTbaLookup(data.routes);
-                renderGroupedView(data.routes);
-                renderRoutesOnMap(data.routes);
-                renderMetrics(lastFleetMetrics, data.fleetMileage);
+                refreshPlanViews(data.routes);
+                renderMetrics(lastFleetMetrics);
                 renderValidation(data.routes, data.validation);
 
                 closePage('movePage');
@@ -2471,19 +2467,14 @@ TBA987654321,19020"></textarea>
                       kind, validation.errors ? 9000 : 6000);
         }
 
-        function rebuildTbaLookup(routes) {
-            tbaLookup = {};
-            routes.forEach(r => {
-                let n = 0;
-                r.route.forEach(s => {
-                    if (isWarehouse(s)) return;
-                    n++;
-                    s.tbas.forEach(t => {
-                        tbaLookup[t.trim().toUpperCase()] =
-                            { d: r.driverId, s: n, eta: s.etaSeconds };
-                    });
-                });
-            });
+        // Everything that has to be redrawn when the plan changes, in one place.
+        // These used to be called individually from two spots and the dashboard
+        // got missed, so it kept showing counts from before the move.
+        function refreshPlanViews(routes) {
+            renderGroupedView(routes);
+            buildMap(routes);
+            buildLookup(routes);
+            updateDashboard(routes);
         }
 
         function renderIssues(issues) {
