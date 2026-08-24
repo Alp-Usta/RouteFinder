@@ -313,6 +313,9 @@
         .btn-undo { width: auto; padding: 5px 12px; font-size: 0.85em; background: #2a3a4a;
                     color: #cfe3ff; border: 1px solid #3a5a7a; border-radius: 4px; }
         .btn-undo:hover { background: #35485c; }
+        .empty-driver-note { font-size: 0.78em; color: #7fd8cc; margin-top: 4px; line-height: 1.45;
+                             background: rgba(42,157,143,.10); border-left: 3px solid #2a9d8f;
+                             padding: 5px 8px; border-radius: 0 3px 3px 0; }
         .manual-badge { display: inline-block; font-size: 0.72em; color: #9dc4ff; margin-top: 4px;
                         background: rgba(58,134,255,.12); border: 1px solid #3a5a7a;
                         padding: 2px 7px; border-radius: 3px; }
@@ -321,8 +324,19 @@
         .route-mileage strong { color: #ccc; }
         .cost-dim { color: #666; }
         .vb-remote { background: rgba(58,134,255,.12); border: 1px solid #3a86ff; color: #9dc4ff; }
+        .vb-empty { background: rgba(42,157,143,.12); border: 1px solid #2a9d8f; color: #7fd8cc; }
+        .relieve-reason { font-size: 0.82em; color: #ffcf80; margin-top: 6px; }
+        .relieve-suggest { font-size: 0.82em; color: #bbb; margin-top: 6px; line-height: 1.5; }
+        .relieve-suggest strong { color: #fca311; }
+        .relieve-top { font-size: 0.7em; color: #121212; background: #fca311; padding: 2px 7px;
+                       border-radius: 3px; font-weight: bold; margin-left: auto; }
         .issue-card-remote { border-left: 4px solid #3a86ff; }
         .issue-remote { background: rgba(58,134,255,.10); border-left: 3px solid #3a86ff; color: #9dc4ff; }
+        .remote-where { font-size: 0.75em; color: #9dc4ff; background: rgba(58,134,255,.14);
+                        padding: 2px 8px; border-radius: 3px; margin-left: auto; }
+        .remote-where-ovf { color: #ff8a9c; background: rgba(217,4,41,.14); }
+        .remote-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .remote-actions button { width: auto; padding: 6px 14px; font-size: 0.8em; }
         .ovf-head { display: flex; align-items: baseline; gap: 8px; }
         .ovf-head .eta-move { margin-left: auto; }
         .eta-move { color: #fca311; font-size: 0.9em; cursor: pointer; padding-left: 8px; }
@@ -358,6 +372,10 @@
                             min-width: 0; flex-wrap: wrap; }
         .move-near { color: #7fd8cc; font-size: 0.8em; white-space: nowrap; }
         .move-near.far { color: #c98b8b; }
+        .move-target-empty { border-color: #2a9d8f; background: rgba(42,157,143,.07); }
+        .move-target-empty .move-near { color: #7fd8cc; }
+        .move-target-ovf { border-color: #6a3a3a; }
+        .move-target-ovf .move-near { color: #c98b8b; }
         .move-search { width: 100%; margin-bottom: 8px; padding: 9px 12px; font-size: 0.88em; }
         .move-pkg-actions { display: flex; gap: 8px; margin-bottom: 8px; }
         .move-pkg-actions button { width: auto; padding: 5px 12px; font-size: 0.78em;
@@ -564,6 +582,7 @@ TBA987654321,19020"></textarea>
                     </div>
                     <div style="font-size:0.8em; color:#aaa; margin-bottom:5px; text-align:center;">Click Name to Copy • Click Card to Filter</div>
                     <div id="undoBar"></div>
+                    <div id="emptyDriverNotice"></div>
                     <div id="remoteNotice"></div>
                     <div id="validationBanner"></div>
                     <div id="metricsBar"></div>
@@ -600,6 +619,19 @@ TBA987654321,19020"></textarea>
                     </div>
                 </div>
             </div>
+        </div>
+
+        <div id="relievePage" class="page-overlay">
+            <div class="page-header">
+                <div>
+                    <h2 style="color:#2a9d8f;">Which route needs relief?</h2>
+                    <div class="sub">Ordered by strain, with a suggested stop to move</div>
+                </div>
+                <div class="page-actions">
+                    <button class="btn-close-page" onclick="closePage('relievePage')">Close</button>
+                </div>
+            </div>
+            <div class="page-body"><div id="relieveBody"></div></div>
         </div>
 
         <div id="movePage" class="page-overlay">
@@ -1715,6 +1747,7 @@ TBA987654321,19020"></textarea>
             document.getElementById('metricsBar').innerHTML = '';
             document.getElementById('validationBanner').innerHTML = '';
             document.getElementById('remoteNotice').innerHTML = '';
+            document.getElementById('emptyDriverNotice').innerHTML = '';
             document.getElementById('zipMenu').innerHTML = '';
             document.getElementById('zipMenu').classList.remove('show');
 
@@ -1799,12 +1832,21 @@ TBA987654321,19020"></textarea>
                         }
                         remoteStops = payload.remoteStops || [];
                         lastFleetMetrics = payload.fleetMetrics;
-                        renderMetrics(payload.fleetMetrics);
-                        renderRemoteNotice();
-                        renderValidation(payload.routes, payload.validation);
                     }
+
+                    // Set this BEFORE anything renders. The remote-areas page
+                    // looks up which driver holds each stop, and it was running
+                    // against the previous plan (empty on a first run), so every
+                    // card came out with no badge and no buttons.
                     const active = routes.filter(r => r.route.length > 0);
                     allCalculatedRoutes = active;
+
+                    if (!Array.isArray(payload)) {
+                        renderMetrics(payload.fleetMetrics);
+                        renderRemoteNotice();
+                        renderEmptyDriverNotice();
+                        renderValidation(payload.routes, payload.validation);
+                    }
                     if (mode === 'auto') {
                         const blocks = [2, 2.5, 3, 3.5, 4];
                         drivers = [];
@@ -2065,8 +2107,15 @@ TBA987654321,19020"></textarea>
                     across the map or end up unassigned when the fleet is small. Worth deciding
                     deliberately: give one a dedicated run, or hold them for another day.
                 </div>
-                ${remoteStops.map(s => `
-                    <div class="issue-card issue-card-remote">
+                ${remoteStops.map(s => {
+                    // Where does this one currently sit? A remote ZIP might be on
+                    // a driver, or might already have fallen into overflow.
+                    const holder = allCalculatedRoutes.find(r =>
+                        r.route.some(x => !isWarehouse(x) && x.address === s.address));
+                    const onDriver = holder && !holder.isOverflow;
+                    const unassigned = holder && holder.isOverflow;
+
+                    return `<div class="issue-card issue-card-remote">
                         <div class="issue-card-head">
                             <span style="color:#3a86ff; font-weight:bold;">${s.address}</span>
                             <span style="color:#999; font-size:0.85em;">
@@ -2074,10 +2123,27 @@ TBA987654321,19020"></textarea>
                                 &middot; ${s.stemMin} min from base
                                 ${s.nearestMin !== null ? `&middot; nearest stop ${s.nearestMin} min` : ''}
                             </span>
+                            ${onDriver ? `<span class="remote-where">on Driver ${holder.driverId}</span>`
+                              : unassigned ? `<span class="remote-where remote-where-ovf">unassigned</span>`
+                              : ''}
                         </div>
                         <div class="issue issue-remote">${s.reason}</div>
                         <div class="eta-tbas" style="padding-left:0; margin-top:8px;">${s.tbas.join(', ')}</div>
-                    </div>`).join('')}`;
+                        <div class="remote-actions">
+                            ${onDriver ? `
+                                <button class="btn-cfg" onclick="remoteToOverflow('${holder.driverId}', '${s.address}')">
+                                    Leave unassigned
+                                </button>
+                                <button class="btn-cfg" onclick="relieveFrom('${holder.driverId}', '${s.address}')">
+                                    Move to another driver
+                                </button>` : ''}
+                            ${unassigned ? `
+                                <button class="btn-cfg" onclick="relieveFrom('OVERFLOW', '${s.address}')">
+                                    Assign to a driver
+                                </button>` : ''}
+                        </div>
+                    </div>`;
+                }).join('')}`;
         }
 
         // =====================================================
@@ -2174,9 +2240,15 @@ TBA987654321,19020"></textarea>
                         const d = haversineKm(s.coordinates, stop.coordinates);
                         if (d < near) near = d;
                     });
-                    return { r, stops, near };
+                    return { r, stops, near, empty: stops.length === 0 };
                 })
-                .sort((a, b) => a.near - b.near);
+                // Empty drivers first. You added them to take pressure off
+                // someone else, so they should not be buried under drivers that
+                // happen to already pass nearby.
+                .sort((a, b) => {
+                    if (a.empty !== b.empty) return a.empty ? -1 : 1;
+                    return a.near - b.near;
+                });
 
             document.getElementById('moveTitle').textContent = `Move from ${address}`;
             document.getElementById('moveSub').textContent =
@@ -2234,23 +2306,43 @@ TBA987654321,19020"></textarea>
             if (targets.length === 0) {
                 html += `<div class="empty-state" style="padding:12px;">No other driver available.</div>`;
             } else {
-                targets.forEach(({ r, stops, near }) => {
+                targets.forEach(({ r, stops, near, empty }) => {
                     const pk = stops.reduce((a, s) => a + s.tbas.length, 0);
                     const already = stops.some(s => s.address === address);
                     const util = Math.round((r.totalHours / r.driverMax) * 100);
                     const color = DRIVER_COLORS[(r.driverId - 1) % DRIVER_COLORS.length];
-                    const nearTxt = already ? 'already goes here'
+                    const nearTxt = empty ? 'free, nothing assigned'
+                        : already ? 'already goes here'
                         : isFinite(near) ? `${near.toFixed(1)} km away` : 'no overlap';
-                    html += `<div class="move-target" onclick="chooseMoveTarget(this, '${r.driverId}')">
+                    html += `<div class="move-target ${empty ? 'move-target-empty' : ''}"
+                                  onclick="chooseMoveTarget(this, '${r.driverId}')">
                         <span class="move-dot" style="background:${color};"></span>
                         <div class="move-target-main">
                             <span class="move-target-name">Driver ${r.driverId}</span>
-                            <span class="move-target-meta">${r.assignedVehicle || ''} &middot; ${pk} pkgs
-                                &middot; ${util}% of ${r.driverMax}h &middot; ${Math.round(r.vehicleUsagePct || 0)}% full</span>
+                            <span class="move-target-meta">${empty
+                                ? `${r.assignedVehicle || ''} &middot; empty ${r.driverMax}h block`
+                                : `${r.assignedVehicle || ''} &middot; ${pk} pkgs
+                                   &middot; ${util}% of ${r.driverMax}h &middot; ${Math.round(r.vehicleUsagePct || 0)}% full`}</span>
                         </div>
-                        <span class="move-near ${already || near < 8 ? '' : 'far'}">${nearTxt}</span>
+                        <span class="move-near ${empty || already || near < 8 ? '' : 'far'}">${nearTxt}</span>
                     </div>`;
                 });
+            }
+
+            // Taking work off a driver is a move too. Without this the only way
+            // to relieve an overloaded route was to re-plan everything.
+            if (String(fromDriverId) !== 'OVERFLOW') {
+                const ovf = allCalculatedRoutes.find(r => r.isOverflow);
+                const ovfPk = ovf ? (ovf.totalPackages || 0) : 0;
+                html += `<div class="move-target move-target-ovf" onclick="chooseMoveTarget(this, 'OVERFLOW')">
+                    <span class="move-dot" style="background:#d90429;"></span>
+                    <div class="move-target-main">
+                        <span class="move-target-name">Leave unassigned</span>
+                        <span class="move-target-meta">Park it in the overflow pile
+                            ${ovfPk ? `&middot; ${ovfPk} package${ovfPk > 1 ? 's' : ''} there now` : ''}</span>
+                    </div>
+                    <span class="move-near">takes load off this driver</span>
+                </div>`;
             }
             html += `</div></div>`;
 
@@ -2472,10 +2564,177 @@ TBA987654321,19020"></textarea>
         // got missed, so it kept showing counts from before the move.
         function refreshPlanViews(routes) {
             renderGroupedView(routes);
+            renderEmptyDriverNotice();
+            renderRemoteNotice();
             buildMap(routes);
             buildLookup(routes);
             updateDashboard(routes);
         }
+
+        // Which routes are worth taking work off, and which stop to take.
+        //
+        // Two different kinds of strain: a route carrying too much, and a route
+        // stretched too wide. They want different stops peeled off, so both are
+        // scored and the reason is spelled out rather than left implied.
+        function relieveCandidates() {
+            // Routes with a single stop are excluded. Moving their only stop
+            // just makes them the empty driver instead, which helps nobody.
+            const working = allCalculatedRoutes.filter(r => !r.isOverflow && !r.isEmpty
+                && r.route.filter(s => !isWarehouse(s)).length > 1);
+
+            return working.map(r => {
+                const stops = r.route.filter(s => !isWarehouse(s));
+                const pk = stops.reduce((a, s) => a + s.tbas.length, 0);
+                const util = r.driverMax ? r.totalHours / r.driverMax : 0;
+
+                // Widest gap between any two of its stops
+                let spread = 0;
+                for (let i = 0; i < stops.length; i++)
+                    for (let j = i + 1; j < stops.length; j++)
+                        spread = Math.max(spread, haversineKm(stops[i].coordinates, stops[j].coordinates));
+
+                // The stop that sits furthest from the rest of the route. Peeling
+                // this one off shortens the route more than peeling any other.
+                let outlier = null, worstAvg = -1;
+                stops.forEach(s => {
+                    if (stops.length < 2) { outlier = s; return; }
+                    let sum = 0;
+                    stops.forEach(o => { if (o !== s) sum += haversineKm(s.coordinates, o.coordinates); });
+                    const avg = sum / (stops.length - 1);
+                    if (avg > worstAvg) { worstAvg = avg; outlier = s; }
+                });
+
+                // Heaviest stop, for a route straining on load rather than distance
+                const heaviest = [...stops].sort((a, b) => b.tbas.length - a.tbas.length)[0];
+
+                const strain = (util * 100) + (spread * 2) + (pk * 1.5);
+                const reason = util > 0.85 ? `${Math.round(util * 100)}% of the block used`
+                    : spread > 15 ? `stops spread over ${spread.toFixed(0)} km`
+                    : pk >= 10 ? `carrying ${pk} packages`
+                    : `${Math.round(util * 100)}% of the block, ${pk} packages`;
+
+                // When the same stop is both the heaviest and the most out of the
+                // way, say so, since that is the clearest one to move.
+                let suggest;
+                if (heaviest && outlier && heaviest === outlier) {
+                    suggest = { stop: heaviest,
+                        why: `heaviest stop and furthest from the rest of the route` };
+                } else if ((util > 0.85 || pk >= 10) && heaviest) {
+                    suggest = { stop: heaviest, why: `heaviest stop, ${heaviest.tbas.length} packages` };
+                } else {
+                    suggest = { stop: outlier, why: outlier ? 'furthest from the rest of the route' : '' };
+                }
+
+                return { r, stops, pk, util, spread, strain, reason, suggest };
+            }).sort((a, b) => b.strain - a.strain);
+        }
+
+        function renderEmptyDriverNotice() {
+            const el = document.getElementById('emptyDriverNotice');
+            if (!el) return;
+            const empties = allCalculatedRoutes.filter(r => r.isEmpty);
+            if (empties.length === 0) { el.innerHTML = ''; return; }
+
+            const names = empties.map(e => 'Driver ' + e.driverId).join(', ');
+            el.innerHTML = `<div class="validation-banner vb-empty clickable" onclick="openRelievePage()">
+                ${empties.length} driver${empties.length > 1 ? 's have' : ' has'} nothing assigned
+                (${names}) &mdash; hand ${empties.length > 1 ? 'them' : 'it'} work to ease another route
+                <span class="banner-cta">Pick a route &rarr;</span></div>`;
+        }
+
+        window.openRelievePage = () => {
+            const empties = allCalculatedRoutes.filter(r => r.isEmpty);
+            const cands = relieveCandidates();
+            const body = document.getElementById('relieveBody');
+
+            if (cands.length === 0) {
+                body.innerHTML = `<div class="empty-state" style="padding:20px; line-height:1.6;">
+                    No route has more than one stop, so there is nothing worth moving.<br>
+                    Taking the only stop off a driver would just move the idle driver around.
+                    ${allCalculatedRoutes.some(r => r.isOverflow)
+                        ? '<br><br>There are unassigned packages though &mdash; try assigning those instead.'
+                        : ''}
+                </div>`;
+                openPage('relievePage');
+                return;
+            }
+
+            body.innerHTML = `
+                <div class="cmp-note" style="margin-bottom:14px;">
+                    ${empties.length} free driver${empties.length > 1 ? 's' : ''}:
+                    <strong>${empties.map(e => 'Driver ' + e.driverId
+                        + ' (' + (e.assignedVehicle || '') + ', ' + e.driverMax + 'h)').join(', ')}</strong>.
+                    Routes below are ordered by how much strain they are under. The suggested stop is the
+                    one that helps most to move &mdash; either the heaviest, or the one furthest from the
+                    rest of the route. Nothing here is compulsory; you can open any route and pick a
+                    different stop.
+                </div>
+                ${cands.map((c, i) => {
+                    const color = DRIVER_COLORS[(c.r.driverId - 1) % DRIVER_COLORS.length];
+                    const top = i === 0 ? '<span class="relieve-top">most strained</span>' : '';
+                    return `<div class="issue-card ${i === 0 ? 'issue-card-warning' : ''}">
+                        <div class="issue-card-head">
+                            <span style="color:${color}; font-weight:bold;">Driver ${c.r.driverId}</span>
+                            <span style="color:#999; font-size:0.85em;">
+                                ${c.stops.length} stops &middot; ${c.pk} pkgs
+                                &middot; ${Math.round(c.util * 100)}% of ${c.r.driverMax}h
+                                &middot; spread ${c.spread.toFixed(1)} km</span>
+                            ${top}
+                        </div>
+                        <div class="relieve-reason">Under strain: ${c.reason}</div>
+                        ${c.suggest.stop ? `
+                            <div class="relieve-suggest">
+                                Suggested: move <strong>${c.suggest.stop.address}</strong>
+                                (${c.suggest.stop.tbas.length} pkg) &mdash; ${c.suggest.why}
+                            </div>
+                            <button class="btn-cfg issue-focus"
+                                    onclick="relieveFrom('${c.r.driverId}', '${c.suggest.stop.address}')">
+                                Move this stop
+                            </button>` : ''}
+                    </div>`;
+                }).join('')}`;
+            openPage('relievePage');
+        };
+
+        // Park a remote stop in the overflow pile without opening the dialog.
+        // Same endpoint and the same undo snapshot as any other move, so it can
+        // be taken back the same way.
+        window.remoteToOverflow = async (driverId, address) => {
+            pushUndo(`${address} \u2192 unassigned`);
+            try {
+                const res = await fetch('/reassign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        routes: allCalculatedRoutes,
+                        config: configOverrides,
+                        move: { fromDriverId: driverId, toDriverId: 'OVERFLOW', address, tbas: null }
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || data.error) throw new Error(data.error || 'Move failed');
+
+                allCalculatedRoutes = data.routes;
+                refreshPlanViews(data.routes);
+                renderMetrics(lastFleetMetrics);
+                renderValidation(data.routes, data.validation);
+                renderUndoBar();
+                closePage('remotePage');
+                showToast(`${address} is now unassigned. `
+                    + `${data.validation.errors ? 'Check the flagged routes.' : 'All checks still pass.'}`,
+                    data.validation.errors ? 'error' : 'ok');
+            } catch (e) {
+                moveHistory.pop();
+                renderUndoBar();
+                showToast('Could not move it: ' + e.message, 'error');
+            }
+        };
+
+        window.relieveFrom = (driverId, address) => {
+            closePage('relievePage');
+            closePage('remotePage');
+            openMoveDialog(driverId, address);
+        };
 
         function renderIssues(issues) {
             if (!issues || issues.length === 0) return '';
@@ -2875,6 +3134,14 @@ TBA987654321,19020"></textarea>
                         warn.className = 'veh-warn';
                         warn.textContent = r.vehicleWarning;
                         infoEl.appendChild(warn);
+                    }
+
+                    if (r.isEmpty) {
+                        const e = document.createElement('div');
+                        e.className = 'empty-driver-note';
+                        e.textContent = 'Nothing assigned. Nothing was in reach when the plan ran '
+                            + '\u2014 move a stop here to put this driver to work.';
+                        infoEl.appendChild(e);
                     }
 
                     if (r.manuallyAdjusted && key !== "OVERFLOW") {
