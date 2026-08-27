@@ -164,6 +164,8 @@ Company and product names that appear anywhere in this project are trademarks of
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Copyright © 2026 Alp Usta. All rights reserved. See [LICENSE](LICENSE).
 
-Provided as-is. If you run it, you're responsible for what you do with it and for complying with whatever rules apply where you work.
+You're welcome to read the code and run it locally to evaluate it or learn from it. Redistribution, modification, or commercial use needs written permission.
+
+Provided as-is, with no warranty. If you run it, you're responsible for what you do with it and for complying with whatever rules apply where you work.
