@@ -1,93 +1,169 @@
+# RouteFinder
 
+A route planning tool for last-mile package delivery. You give it a CSV of packages and a list of drivers, and it works out who should take what.
 
-# 🚀 RouteFinder: A Real-World Logistics Optimizer
+Built independently, on my own time and my own equipment, as a personal and academic project.
 
-This isn't just a portfolio project; it's a real-world solution I built to solve a major inefficiency I faced every day at my job as an Amazon Warehouse Associate at DPH9.
+---
 
-## The Problem: "Leftover Packages"
+## What problem this solves
 
-At my warehouse, we'd often have hundreds of leftover packages that needed to be dispatched to flex drivers. The process was entirely manual:
+Last-mile delivery in a lot of places still comes down to somebody standing in front of a pile of packages in the morning deciding who takes what. Gig drivers book time blocks, usually two to four hours, and drive their own cars — some a sedan, some an SUV, some a pickup.
 
+Getting that assignment wrong costs real time:
 
-This system was slow, created a major bottleneck, and was a constant source of frustration for our drivers. Manually-crafted routes are almost never balanced, leading to unfair, inefficient routes.
+- A driver spends the block driving instead of delivering
+- A driver turns up to load and their car can't physically fit what they were given
+- A driver runs past the block they're actually paid for
 
-## The Solution: RouteFinder
+Doing it by hand also tends to produce unbalanced work. One person gets a tight cluster of thirty stops, another gets six stops spread across forty kilometres.
 
-I knew I could solve this. I designed and built RouteFinder, a full-stack logistics tool that automates the entire dispatch process.
+RouteFinder does that assignment step. It takes the package list, groups stops that belong together, and hands each group to a driver whose vehicle and block length can actually handle it.
 
-  * **What it does:** It takes a raw CSV export of packages (TBA and postal code) and, for a set number of drivers, calculates the most efficient, mathematically balanced routes.
-  * **The Logic:** The backend uses **K-means++ clustering** to group stops into logical regions and the **2-Opt algorithm** to solve the "Traveling Salesperson Problem" for each driver, minimizing their drive time.
-  * **The Impact:** When I showed the proof-of-concept to my managers, they were impressed by its ability to cut the dispatch and routing process from a long, manual task down to a minutes-long calculation.
+**It does not do turn-by-turn navigation.** Once a driver has their packages, their own delivery app handles directions and stop order. What this tool decides is which packages belong together and who gets them.
 
------
+---
 
-## Technical Versions
+## What it does
 
-This repository contains two complete versions of this application, each on a separate branch.
+**Planning**
+- Imports a CSV of packages (tracking number, postal code, optional dimensions)
+- Geocodes postal codes and builds a real drive-time matrix from a self-hosted routing engine
+- Assigns stops to drivers under hard constraints: cargo volume, longest item, block hours, drive-out distance, maximum gap between stops, and a cap on how much of a block can be spent driving rather than delivering
+- Two planning strategies, switchable, with a side-by-side comparison view
 
-### 1\. `main` branch: The Google Maps API Version **DEPRECATED**
+**Vehicles**
+- Three tiers with editable cargo volumes
+- Checks longest item separately from volume, because a long thin package can fit by cubic volume and still not go through a trunk opening
+- Matches each route to the smallest vehicle in the fleet that can carry it
 
-This is the "enterprise-grade" version. It uses the **Google Maps Geocoding API** and **Distance Matrix API** to get hyper-accurate, real-world driving times based on live traffic.
+**Working with the plan**
+- Interactive map with numbered per-driver stops
+- Barcode lookup: scan a package, it tells you which driver has it and when they'll be there
+- Move packages between drivers by hand, with a map, a search box that accepts a scan, and drivers listed nearest first
+- Safety checks on every route after every change, warning before dispatch rather than after
+- Undo, twenty steps
+- Arrival time at every stop
+- Miles and running cost per route
 
-  * **Pro:** Extremely fast and accurate.
-  * **Con:** Prohibitively expensive at scale. To calculate routes for 800 packages, it would require a 640,000-element matrix, which is impossible on a standard or free-tier API key.
+**Screening**
+- Separates packages that aren't customer deliveries so they don't end up on a van
+- Optional residential-only filter, since businesses are closed after hours
+- Flags stops that sit far out on their own before you commit to them
 
-### 2\. `v4 and later`: The 100% Open-Source, Self-Hosted Version
+**Tuning**
+- Every routing constant is editable in the UI, 56 of them, sliders with typed entry
 
-This is the version I built to solve the cost and scale problem. It's the one I use, as it has **no API limits or costs**.
+---
 
-  * **Pro:** 100% free. Can handle any number of packages.
-  * **Con:** Requires a more complex, self-hosted setup.
+## Running it
 
-To achieve this, I migrated the entire backend:
+Two things run side by side: a routing engine that answers "how long does it take to drive from A to B", and the app itself.
 
-  * **Routing:** Replaced Google's API with a self-hosted **GraphHopper** server.
-  * **Geocoding:** Replaced Google's API with the public **Nominatim (OpenStreetMap)** API.
+### Requirements
 
-#### The "Missing Matrix" Challenge
+- Java 17 or newer
+- Node.js 18 or newer
+- About 8 GB of free disk space for map data and the routing graph
+- 4 GB of RAM available to the routing engine
 
-The free, open-source GraphHopper server does *not* include the premium "Matrix API." This was the biggest challenge.
+### Setup
 
-**Solution:** I re-engineered the backend to build the matrix manually. For 200 zip codes, my `server.js` makes **40,401** (201x201) individual requests to the local GraphHopper server to build the travel-time matrix from scratch.
+```bash
+git clone https://github.com/Alp-Usta/RouteFinder.git
+cd RouteFinder
+./setup.sh
+```
 
-This self-hosted version is so robust, it can process a real-world scenario of **8,000 packages** across **200 unique zip codes** in **under 6 minutes**.
+That downloads the routing engine, downloads map data, installs dependencies, and builds the routing graph.
 
------
+**The graph build takes 10 to 30 minutes the first time.** It only happens once. Everything after that starts in seconds.
 
-## How to Run This Project (v4 and later - Open Source)
+Setup rewrites `config-example.yml` to point at whatever map file it actually downloaded, so you don't have to keep the filename in sync by hand. It prints the change and stops with instructions if it can't make the edit.
 
-This version requires two servers to run simultaneously.
+Delivering somewhere other than the US northeast? Pick your region from [Geofabrik](https://download.geofabrik.de/) and point setup at it:
 
-### 1\. The GraphHopper Server (Routing Engine)
+```bash
+MAP_URL="https://download.geofabrik.de/europe/great-britain-latest.osm.pbf" ./setup.sh
+```
 
-You only need to do this setup once.
+### Starting it
 
-1.  **Download GraphHopper:** Download the `graphhopper-web-*.jar` file from the [latest release](https://github.com/graphhopper/graphhopper/releases).
+```bash
+./start.sh
+```
 
-2.  **Download Map Data:** Download a map file in `.osm.pbf` format (e.g., `us-northeast-latest.osm.pbf`) from [Geofabrik](https://download.geofabrik.de/).
+Then open **http://localhost:3000**. Ctrl-C stops both servers.
 
+### If setup fails
 
-3.  **Run the Server:** Open a terminal in that folder and run the command. This will take a long time (10-30+ minutes) the *first* time as it builds the `graph-cache`.
+- **"Java is missing"** — install a JDK 17+ (`brew install openjdk@17` on macOS, `apt install default-jdk` on Debian/Ubuntu)
+- **Graph build runs out of memory** — raise the heap in `setup.sh` and `start.sh`, e.g. `-Xmx8g`
+- **Port already in use** — the routing engine needs 8989 and the app needs 3000
+- **Graph build interrupted** — delete the `graph-cache` folder and run `./setup.sh` again, otherwise it'll try to use a half-built graph
+- **"file not found" naming a `.osm.pbf`** — the map filename in `config-example.yml` doesn't match the file on disk. Re-running `./setup.sh` fixes it, or set `datareader.file` by hand to match whatever `.osm.pbf` you have
 
-    ```bash
-    java -jar graphhopper-web-*.jar server config-example.yml
-    ```
+### Doing it manually
 
-    Leave this terminal running.
+If you'd rather not use the scripts, `setup.sh` is short and readable. The two commands it comes down to:
 
-### 2\. The Node.js Server (This App)
+```bash
+java -Xmx4g -jar graphhopper-web-*.jar server config-example.yml   # terminal 1
+node server.js                                                     # terminal 2
+```
 
-1.  Clone this repository
-    ```bash
-    git clone 
-    cd RouteFinder
-    ```
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-3.  Run the server:
-    ```bash
-    node server.js
-    ```
-4.  Open `http://localhost:3000` in your browser.
+---
+
+## How it works
+
+**Geocoding** — a local postal code database with a [Nominatim](https://nominatim.org/) fallback for anything it misses.
+
+**Drive times** — a self-hosted [GraphHopper](https://www.graphhopper.com/) instance running OpenStreetMap data. Every stop-to-stop time is a real routed drive, not straight-line distance.
+
+**The matrix problem.** The free GraphHopper build doesn't include a matrix endpoint, so the app builds one itself: for N stops it makes N×N individual routing requests against the local engine. For 200 postal codes that's around 40,000 requests, which sounds like a lot but runs locally in a few minutes because there's no network involved.
+
+**Assignment** — a constructive heuristic that fills one driver at a time starting from the densest unassigned area, then improves with route merging and stop swapping between routes. A second strategy using k-medoids clustering on the drive-time matrix is available and switchable, along with a view that runs both and compares them.
+
+**Sequencing** — 2-opt within each route. This is used internally so the time estimates and constraint checks are realistic, not because the driver needs it. Their delivery app handles the actual order on the road.
+
+---
+
+## Tech
+
+- **Frontend** — HTML, CSS, vanilla JavaScript. MapLibre GL for mapping. No framework.
+- **Backend** — Node.js, Express
+- **Routing** — self-hosted GraphHopper, OpenStreetMap data
+- **Geocoding** — local postal code DB, Nominatim fallback
+
+No paid APIs and no API keys. An earlier build used a commercial mapping API and the bill for three days of testing was steep enough to make the point — everything here runs locally and free.
+
+---
+
+## Project history
+
+Earlier branches used commercial mapping APIs before the migration to a self-hosted engine. `main` is the current version; older branches are kept for reference but aren't maintained.
+
+---
+
+## About this project
+
+I work in warehouse operations, and this started because I kept watching a slow manual process and thought it could be done better.
+
+Some things worth being clear about:
+
+- Built entirely on my own time, on my own equipment, with my own tools
+- No employer code, systems, credentials, internal documentation, or proprietary information were used
+- No connection to any employer network or internal service
+- No real customer data, addresses, or personal information is in this repository. Test data is either synthetic or has identifying details removed
+- Not affiliated with, endorsed by, or sponsored by any delivery company
+- The problem it addresses is general to last-mile logistics and is documented publicly in operations research literature. Nothing here depends on any particular company's methods
+
+Company and product names that appear anywhere in this project are trademarks of their respective owners and are used only to describe what the software is for.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+Provided as-is. If you run it, you're responsible for what you do with it and for complying with whatever rules apply where you work.
