@@ -24,11 +24,12 @@ RouteFinder does that assignment step. It takes the package list, groups stops t
 
 ---
 
+
 ## What it looks like
 
 ### Loading a manifest
 
-![Package intake and fleet setup](satty-2026-08-26_23_40_43.png)
+![Package intake and fleet setup](docs/screenshots/01-manifest-intake.png)
 
 Drop in the CSV and it reports what's actually there: 32 routable packages, 1124 L
 of space needed, the longest item at 142.9 cm, and a size breakdown. It flags that
@@ -37,7 +38,7 @@ manifest is a return rather than a delivery.
 
 ### The plan
 
-![Planned routes on the map](satty-2026-08-26_23_40_58.png)
+![Planned routes on the map](docs/screenshots/02-planned-routes.png)
 
 Six routes across 19 locations. The panel flags three areas sitting on their own,
 confirms every route passes its safety checks, and reports what an unplanned split
@@ -45,18 +46,20 @@ would have cost — three constraint violations, against zero here.
 
 ### Per-driver detail
 
-![Route cards with stops, timing and cost](satty-2026-08-26_23_41_09.png)
+![Route cards with stops, timing and cost](docs/screenshots/03-route-cards.png)
 
 Every driver's route with arrival times, packages per stop, miles, gas and running
 cost. The move link on any stop reassigns it by hand.
 
 ### Comparing planners
 
-![Algorithm comparison](satty-2026-08-26_23_38_36.png)
+![Algorithm comparison](docs/screenshots/04-algorithm-comparison.png)
 
 Both algorithms run on the same packages and fleet. Here cluster-first drives 8
 minutes less for the same 32 packages and spreads work far more evenly across
 drivers, while the greedy planner keeps routes geographically tighter.
+
+---
 
 ## What it does
 
