@@ -59,6 +59,14 @@ Both algorithms run on the same packages and fleet. Here cluster-first drives 8
 minutes less for the same 32 packages and spreads work far more evenly across
 drivers, while the greedy planner keeps routes geographically tighter.
 
+
+### Manual Package Assignment
+
+![Moving Packages Between Drivers](docs/screenshots/05-move_packages.png)
+
+This feature allows dispatcher to override the package assignment.
+
+
 ---
 
 ## What it does
