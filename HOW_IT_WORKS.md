@@ -7,15 +7,16 @@ A walkthrough of what the code does and why, written to be read start to finish.
 ## The problem
 
 A dispatcher gets a manifest: a few hundred packages, each with a tracking number
-and a ZIP. They have some number of drivers, each booked for a block of 2 to 4
-hours, each driving a sedan, an SUV or a truck.
+and a postal code. They have some number of drivers, each booked for a block of
+2 to 4 hours, each driving their own car: a sedan, an SUV or a pickup.
 
 Somebody has to decide which packages go with which driver. Do it badly and a
 driver spends the whole block in the car, or turns up with a package that won't
 fit in their trunk, or runs an hour past their block.
 
 RouteFinder makes that decision. It does **not** decide what order the driver
-visits the stops in on the road — the Flex app on their phone does that.
+visits the stops in on the road. The driver's own delivery app handles that once
+they're loaded.
 
 ---
 
@@ -35,14 +36,13 @@ visits the stops in on the road — the Flex app on their phone does that.
 
 The manifest comes in as CSV. The parser handles quoted fields, byte-order
 marks, unit suffixes on dimensions, and several spellings of each column header,
-because Amazon's exports aren't consistent.
+because the export format isn't consistent between versions.
 
 Every package is sorted into one of three piles:
 
 - **Deliverable** — goes to a driver
-- **FC returns** — destination is a station code like `ACY8` rather than a
-  customer address. These ship back to the fulfillment center and are never
-  routed
+- **Returns** — the destination field holds a facility code rather than a
+  customer address. These go back to a warehouse and are never routed
 - **Held** — a business address while the "residential only" switch is on
 
 Only the first pile goes any further. A blank destination or blank address type
@@ -65,10 +65,10 @@ trunk opening. Both numbers are checked independently everywhere.
 
 ### 3. Geocoding
 
-Each ZIP becomes a lat/lng. A local database handles almost everything;
+Each postal code becomes a lat/lng. A local database handles almost everything;
 Nominatim is the fallback for anything it misses.
 
-Packages sharing a ZIP become one **stop**, since a driver parks once and walks.
+Packages sharing a postal code become one **stop**, since a driver parks once and walks.
 
 ### 4. The drive-time matrix
 
@@ -87,10 +87,12 @@ distance, not ZIP proximity: actual road drive times.
 Stops are bucketed by state and each bucket is planned separately. That is
 deliberate — no driver should get stops in two states.
 
-> **Known bug:** each bucket receives the full driver list, so a manifest
-> spanning PA and NJ produces roughly double the routes you asked for. Doesn't
-> show up on PA-only manifests. Fix is to divide the fleet across buckets before
-> the loop.
+The fleet is divided across the buckets before planning, proportional to how
+much work each state holds, with the longest blocks going to the busiest state.
+
+> This used to be a bug: every bucket got handed the full driver list, so a
+> two-state manifest produced roughly double the routes you asked for. It never
+> showed up on single-state data, which is all that gets run day to day.
 
 ---
 
@@ -128,7 +130,7 @@ planner retries with more slack, in tiers. Each tier adds a fixed amount.
 > driver got — which is exactly why 2-hour routes always looked fine and 4-hour
 > ones sprawled.
 
-### How a route gets built (the default planner)
+### How a route gets built (auto mode)
 
 **Seeding.** Each driver gets a starting stop. The score prefers areas with lots
 of packages, counting both the stop itself and everything within reach of it. A
@@ -138,21 +140,41 @@ treated as one.
 The drive out from the warehouse counts against a seed, but only lightly. Getting
 packages delivered matters more than saving a few minutes at the start.
 
-**The auction.** Every unassigned package belongs to whichever driver's route is
-already nearest to it. Drivers can only bid on packages in their own territory.
-That is what stops routes crossing over each other.
+**Growing.** The driver takes the best available stop, repeatedly, until nothing
+fits. If nothing fits at all, relaxation loosens a tier and it tries again.
 
-Each round, every driver takes the best available option from their own pile. If
-a whole round passes with nobody able to take anything, relaxation loosens a tier
-and it goes again.
+**When two drivers are similarly close** to a package, the one with less work
+takes it. Beyond a few minutes of difference, distance decides and balance
+doesn't get a vote.
 
-When two drivers are within three minutes of a package, they count as equally
-close and the one with less work takes it. Beyond that gap, distance decides and
-balance doesn't get a vote.
+### Manual mode
 
-**Two passes.** The first holds everyone to a fair share of the total work. The
-second drops the shares and lets whoever can take what's left. An unassigned
-package is a worse outcome than an unevenly loaded driver.
+With a fixed fleet the planner can't invent drivers, so it works differently: it
+fills **one driver at a time, starting from the densest area left**. Take the
+busiest cluster, give it to a driver, grow that driver until something stops it,
+then move to the next. Whatever nobody can reach goes to the unassigned pile to
+be handed out by hand.
+
+> This replaced an earlier approach that seeded every driver first and then let
+> them bid in parallel. That commits to positions before knowing where the work
+> is, and it showed: drivers anchored on near-empty areas while the busy ones
+> went unclaimed. On the test manifest the rewrite took delivery from 21 packages
+> to 28 and average block usage from 30% to 53%.
+
+Two things made the difference, and both are worth knowing because they look
+like sensible rules until you measure them:
+
+**A cap on how far a driver may start from the warehouse** ruled out 8 of 19
+areas holding 19 of 32 packages, including both dense ones. The test now asks
+whether the drive out *plus the work waiting there* fits the block. A 43-minute
+run to six packages is a good day. A 43-minute run to one package isn't, and the
+scoring rejects that on its own.
+
+**The gap-between-stops limit was starving everyone.** Instrumenting the
+assignment loop showed 205 rejections, every single one that limit — not time,
+not capacity. Drivers were finishing at 10% of their block with hours to spare
+because nothing was within reach. A driver with an empty block now gets extra
+reach; one nearly full keeps the tight limit.
 
 **Orphans.** Anything still homeless goes to the nearest route with room. Width
 and step rules are relaxed here, but there's still a hard distance cap — bolting
@@ -214,6 +236,11 @@ checked on the way out:
 Errors are red and mean don't dispatch. Warnings are amber and mean look at it.
 The banner is clickable and opens just the flagged routes.
 
+A manual move is never *blocked* for breaking a limit. That's the point of an
+override: the dispatcher can see something the solver can't. The move goes
+through, the consequence gets reported, and the route is marked as hand-adjusted
+so nobody forgets an hour later.
+
 > This caught a real bug on its first run: a route flagged *"A 142.9cm item will
 > not fit a Sedan."* That was the cluster-matching bug above. The check found it
 > after a full regression suite had passed.
@@ -225,8 +252,8 @@ The banner is clickable and opens just the flagged routes.
 The comparison is against what you'd get with no software: manifest top to
 bottom, dealt into equal piles, one per driver.
 
-Each pile is then sequenced the same way a real route is, because the Flex app
-would sequence it either way. That takes stop ordering out of the comparison
+Each pile is then sequenced the same way a real route is, because the driver's
+app would sequence it either way. That takes stop ordering out of the comparison
 entirely and leaves only the part this app is responsible for.
 
 **Why the headline is a problem count, not a percentage.** Manifests usually
@@ -242,6 +269,38 @@ Drive time is reported alongside, so both numbers are visible.
 
 ---
 
+## Moving packages by hand
+
+Every stop has a move link. You can move the whole stop or tick individual
+packages out of it. Bags are excluded, since splitting one is never allowed.
+
+The dialog shows a map with the stop being moved in amber and every candidate
+driver's stops in their own colour, so you can see whose area it actually falls
+in. Drivers are listed nearest first. A search box filters the package list and
+also accepts a barcode scan: scan one, it ticks the match and clears itself.
+
+Moves work in both directions with the unassigned pile, so a stop can be parked
+to relieve a driver and picked back up later.
+
+**The server recomputes the whole plan after a move** rather than patching the
+two routes involved. A move changes stop order, which changes drive time, which
+changes whether the route still fits its block. Patching means re-deriving all of
+that by hand and getting it subtly wrong. Undo goes 20 steps back.
+
+## Advice the app offers
+
+**Remote areas.** Stops that sit far from the warehouse or have no neighbour
+within reach are flagged before dispatch, with actions to assign them or park
+them. These are the ones that quietly stretch a route across the map.
+
+**Route relief.** When a driver has nothing assigned, the app ranks the working
+routes by how much strain they're under and suggests which stop to move. A route
+straining on *load* gets its heaviest stop suggested; one straining on *distance*
+gets its outlier, since removing that shortens the route most. Single-stop routes
+are excluded, because moving their only stop just relocates the idle driver.
+
+---
+
 ## The front end
 
 Plain HTML, CSS and JavaScript with MapLibre GL for the map. No framework.
@@ -250,18 +309,18 @@ Notable pieces:
 
 **The scanner.** Type or scan the last four digits of a tracking number and it
 says which driver has it, which stop, and the ETA. It searches routed packages
-*and* screened-out ones — an FC package used to report NOT FOUND, which reads
+*and* screened-out ones. A return package used to report NOT FOUND, which reads
 like a bad scan when really the package just belongs in a different bin.
 
 **Per-stop ETA.** Set a departure time and every stop shows a clock time. Derived
 from the drive-time matrix plus service time for everything delivered before it.
 
-**Constraint editor.** All 38 tunables as sliders with typed inputs beside them.
+**Constraint editor.** All 56 tunables as sliders with typed inputs beside them.
 Times are entered in minutes. Overrides apply to the next calculation only and
 are reset server-side afterwards, so one person's experiment can't leak into
 anyone else's run.
 
-**Exception pages.** FC returns and held addresses each get their own page with
+**Exception pages.** Returns and held addresses each get their own page with
 per-package reasons and a CSV export.
 
 ---
@@ -284,14 +343,22 @@ load summary before you press Calculate; the server can't trust the client. The
 constants are duplicated and have to stay in sync.
 
 **Bag integrity is absolute.** Packages in the same bag never get split across
-drivers. `splitBigZips` skips bags entirely.
+drivers. `splitBigZips` skips bags entirely, and manual moves refuse to split one.
+
+**Every routing constant must be reachable from the editor.** Three were once
+hardcoded where no control could touch them, so tightening a limit changed the
+safety check and not the routing — one part of the code obeyed the new number
+and another didn't. There's an automated check for this now. If tuning a setting
+only moves the warnings, look for a constant that slipped past the schema.
 
 ---
 
 ## Still open
 
-- **Multi-state fleet duplication.** Described above. Invisible on PA-only data
-- **Manual package reassignment.** The safety checks are built and waiting for it
-- **Remote ZIPs.** Isolated far-out ZIPs either stretch a route or go unassigned.
-  Neither is great; they should probably be flagged up front
-- **Weather, time-of-day traffic, mileage and cost.** Not started
+- **Saved constraint presets.** The editor is session-only, so tuning is lost on
+  reload. The only planned feature still outstanding.
+
+Deliberately not built: weather integration, time-of-day traffic weighting, and
+loading-order guidance. Each was measured or reasoned about and judged not worth
+the complexity for what it would change. The reasoning is in the project
+contract.
